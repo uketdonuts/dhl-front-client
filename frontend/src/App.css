@@ -1,0 +1,38 @@
+/* Estilos adicionales específicos de la aplicación */
+.dhl-gradient {
+  background: linear-gradient(135deg, #D40511 0%, #FFCC00 100%);
+}
+
+.dhl-card {
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  transition: all 0.3s ease;
+}
+
+.dhl-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+}
+
+.btn-primary {
+  @apply bg-dhl-red hover:bg-red-700 text-white font-bold py-2 px-4 rounded transition-colors duration-200;
+}
+
+.btn-secondary {
+  @apply bg-dhl-yellow hover:bg-yellow-600 text-gray-800 font-bold py-2 px-4 rounded transition-colors duration-200;
+}
+
+.App {
+  text-align: center;
+  min-height: 100vh;
+  background-color: #f3f4f6;
+}
+
+.App-header {
+  background-color: #282c34;
+  padding: 20px;
+  color: white;
+}
+
+.App-link {
+  color: #61dafb;
+} 
