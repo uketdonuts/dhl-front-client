@@ -10,7 +10,7 @@ const Navigation = () => {
         <div className="flex justify-between h-16">
           <div className="flex items-center">
             <div className="flex-shrink-0 flex items-center">
-              <div className="h-8 w-8 bg-dhl-yellow rounded flex items-center justify-center">
+              <div className="h-8 w-8 bg-yellow-400 rounded flex items-center justify-center">
                 <span className="text-sm font-bold text-gray-800">DHL</span>
               </div>
               <span className="ml-2 text-xl font-semibold text-gray-800">
@@ -27,7 +27,7 @@ const Navigation = () => {
                 </span>
                 <button
                   onClick={logout}
-                  className="bg-dhl-red hover:bg-red-700 text-white px-4 py-2 rounded-md text-sm font-medium transition-colors duration-200"
+                  className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-md text-sm font-medium transition-colors duration-200"
                 >
                   Cerrar Sesión
                 </button>

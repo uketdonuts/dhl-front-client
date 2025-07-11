@@ -56,15 +56,15 @@ class DHLService:
                 "test_shipment_id": "2287013540"
             }
         else:
-            # URLs de producción
+            # URLs de producción - usar endpoints exactos que funcionan
             self.endpoints = {
-                "getePOD": f"{base_url}/gbl/getePOD",
-                "rate": f"{base_url}/sndpt/expressRateBook",
-                "tracking": f"{base_url}/gbl/glDHLExpressTrack",
-                "shipment": f"{base_url}/sndpt/expressRateBook"
+                "getePOD": "https://wsbexpress.dhl.com/gbl/getePOD",
+                "rate": "https://wsbexpress.dhl.com:443/sndpt/expressRateBook",
+                "tracking": "https://wsbexpress.dhl.com/gbl/glDHLExpressTrack",
+                "shipment": "https://wsbexpress.dhl.com:443/sndpt/expressRateBook"
             }
             self.sandbox_data = {
-                "account_number": "TU_ACCOUNT_NUMBER",
+                "account_number": "706065602",  # Usar el número real
                 "test_tracking": "TU_TRACKING_NUMBER",
                 "test_shipment_id": "TU_SHIPMENT_ID"
             }
@@ -91,19 +91,9 @@ class DHLService:
 
     def _get_auth_header(self, endpoint_type=None):
         """Genera header de autenticación WS-Security con credenciales específicas por endpoint"""
-        # Usar credenciales específicas según el endpoint
-        if endpoint_type == "getePOD":
-            username = "apO3fS5mJ8zT7h"
-            password = "J^4oF@1qW!0qS!5b"
-        elif endpoint_type == "rate":
-            username = "USCIM"
-            password = "B#9pC^2fU#0d"
-        elif endpoint_type == "tracking":
-            username = "mydhlapicert"
-            password = "X!9tA@2xU^1n"
-        else:
-            username = self.username
-            password = self.password
+        # Usar las credenciales reales del ejemplo que funciona
+        username = "apO3fS5mJ8zT7h"
+        password = "J^4oF@1qW!0qS!5b"
             
         return f"""
         <wsse:Security SOAP-ENV:mustUnderstand="1" xmlns:wsse="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd">
@@ -450,7 +440,7 @@ class DHLService:
             return {"success": False, "message": f"Error en get_tracking: {str(e)}"}
 
     def create_shipment(self, shipment_data):
-        """Crea un nuevo envío"""
+        """Crea un nuevo envío usando el formato exacto que funciona"""
         try:
             # Para desarrollo/sandbox, simular la creación de envío
             if self.environment in ["sandbox", "development"]:
@@ -473,226 +463,161 @@ class DHLService:
                     "cost": "Calculado según tarifas DHL"
                 }
             
-            # Para producción, usar el endpoint real
+            # Para producción, usar el endpoint real con formato exacto del ejemplo
             soap_action = "euExpressRateBook_providerServices_ShipmentHandlingServices_Binder_createShipmentRequest"
-            
             # Extraer datos del formulario
             shipper = shipment_data.get('shipper', {})
             recipient = shipment_data.get('recipient', {})
             package = shipment_data.get('package', {})
+            packages = shipment_data.get('packages', [])  # Support multiple packages
             service_type = shipment_data.get('service', 'P')
             payment_type = shipment_data.get('payment', 'S')
-            
-            # Fecha futura para evitar errores - formato correcto para DHL
-            future_date = (datetime.now() + timedelta(days=1)).strftime('%Y-%m-%dT%H:%M:%S.000+00:00')
-            
-            soap_body = f"""
-            <soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:ship="http://scxgxtt.phx-dc.dhl.com/euExpressRateBook/ShipmentMsgRequest">
-                <soapenv:Header>
-                    {self._get_auth_header()}
-                </soapenv:Header>
-                <soapenv:Body>
-                    <ship:ShipmentRequest>
-                        <Request>
-                            <ServiceHeader>
-                                <MessageTime>{datetime.now().strftime('%Y-%m-%dT%H:%M:%S-05:00')}</MessageTime>
-                                <MessageReference>SHIP{int(datetime.now().timestamp())}</MessageReference>
-                                <WebstorePlatform>DHL_API_CLIENT</WebstorePlatform>
-                                <WebstorePlatformVersion>1.0</WebstorePlatformVersion>
-                                <ShippingSystemPlatform>DHL_EXPRESS</ShippingSystemPlatform>
-                                <ShippingSystemPlatformVersion>1.0</ShippingSystemPlatformVersion>
-                                <PlugIn>FLASK_API</PlugIn>
-                                <PlugInVersion>1.0</PlugInVersion>
-                            </ServiceHeader>
-                        </Request>
-                        <RequestedShipment>
-                            <ShipmentInfo>
-                                <DropOffType>REGULAR_PICKUP</DropOffType>
-                                <ServiceType>{service_type}</ServiceType>
-                                <Billing>
-                                    <ShipperAccountNumber>706014493</ShipperAccountNumber>
-                                    <ShippingPaymentType>{payment_type}</ShippingPaymentType>
-                                    <DutyAndTaxPayerAccountNumber>706014493</DutyAndTaxPayerAccountNumber>
-                                </Billing>
-                                <Currency>{package.get('currency', 'USD')}</Currency>
-                                <UnitOfMeasurement>SU</UnitOfMeasurement>
-                                <LabelType>PDF</LabelType>
-                                <LabelTemplate>ECOM26_84_001</LabelTemplate>
-                                <ArchiveLabelTemplate>ARCH_8x4</ArchiveLabelTemplate>
-                            </ShipmentInfo>
-                            <ShipTimestamp>{future_date}</ShipTimestamp>
-                            <PaymentInfo>DDP</PaymentInfo>
-                            <InternationalDetail>
-                                <Commodities>
-                                    <Description>{self._clean_text(package.get('description', 'General Merchandise'))}</Description>
-                                    <CustomsValue>{package.get('value', 100)}</CustomsValue>
-                                </Commodities>
-                                <Content>NON_DOCUMENTS</Content>
-                            </InternationalDetail>
-                            <Ship>
-                                <Shipper>
-                                    <Contact>
-                                        <PersonName>{self._clean_text(shipper.get('name', 'Test Shipper'))}</PersonName>
-                                        <CompanyName>{self._clean_text(shipper.get('company', 'Company Name'))}</CompanyName>
-                                        <PhoneNumber>{self._clean_phone(shipper.get('phone', '1234567890'))}</PhoneNumber>
-                                        <EmailAddress>{shipper.get('email', 'test@example.com')}</EmailAddress>
-                                    </Contact>
-                                    <Address>
-                                        <StreetLines>{self._clean_text(shipper.get('address', '123 Test Street'))}</StreetLines>
-                                        <City>{self._clean_text(shipper.get('city', 'Test City'))}</City>
-                                        <StateOrProvinceCode>{self._clean_text(shipper.get('state', 'XX'))}</StateOrProvinceCode>
-                                        <PostalCode>{shipper.get('postalCode', '12345')}</PostalCode>
-                                        <CountryCode>{shipper.get('country', 'US')}</CountryCode>
-                                    </Address>
-                                </Shipper>
-                                <Recipient>
-                                    <Contact>
-                                        <PersonName>{self._clean_text(recipient.get('name', 'Test Recipient'))}</PersonName>
-                                        <CompanyName>{self._clean_text(recipient.get('company', 'Company Name'))}</CompanyName>
-                                        <PhoneNumber>{self._clean_phone(recipient.get('phone', '1234567890'))}</PhoneNumber>
-                                        <EmailAddress>{recipient.get('email', 'test@example.com')}</EmailAddress>
-                                    </Contact>
-                                    <Address>
-                                        <StreetLines>{self._clean_text(recipient.get('address', '456 Test Street'))}</StreetLines>
-                                        <City>{self._clean_text(recipient.get('city', 'Test City'))}</City>
-                                        <StateOrProvinceCode>{self._clean_text(recipient.get('state', 'XX'))}</StateOrProvinceCode>
-                                        <PostalCode>{recipient.get('postalCode', '54321')}</PostalCode>
-                                        <CountryCode>{recipient.get('country', 'US')}</CountryCode>
-                                    </Address>
-                                </Recipient>
-                            </Ship>
-                            <Packages>
-                                <RequestedPackages number="1">
-                                    <Weight>{package.get('weight', 1.0)}</Weight>
-                                    <Dimensions>
-                                        <Length>{package.get('length', 10)}</Length>
-                                        <Width>{package.get('width', 10)}</Width>
-                                        <Height>{package.get('height', 10)}</Height>
-                                    </Dimensions>
-                                    <CustomerReferences>SHIP{int(datetime.now().timestamp())}</CustomerReferences>
-                                    <CustomerReferenceType>SH</CustomerReferenceType>
-                                </RequestedPackages>
-                            </Packages>
-                        </RequestedShipment>
-                    </ship:ShipmentRequest>
-                </soapenv:Body>
-            </soapenv:Envelope>
-            """
-            
+            account_number = shipment_data.get('account_number', '706065602')  # Usar la cuenta seleccionada o default
+            # Generar MessageReference único
+            message_ref = f"JCAIN{int(datetime.now().timestamp())}"
+            # Usar formato exacto del ejemplo que funciona
+            soap_body = f"""<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:ship=\"http://scxgxtt.phx-dc.dhl.com/euExpressRateBook/ShipmentMsgRequest\">
+   <soapenv:Header>
+      <wsse:Security soapenv:mustUnderstand=\"1\" xmlns:wsse=\"http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd\">
+         <wsse:UsernameToken>
+            <wsse:Username>apO3fS5mJ8zT7h</wsse:Username>
+            <wsse:Password>J^4oF@1qW!0qS!5b</wsse:Password>
+         </wsse:UsernameToken>
+      </wsse:Security>
+   </soapenv:Header>
+   <soapenv:Body>
+      <ship:ShipmentRequest>
+         <Request>
+            <ServiceHeader>
+               <MessageTime>{datetime.now().strftime('%Y-%m-%dT%H:%M:%S-05:00')}</MessageTime>
+               <MessageReference>{message_ref}</MessageReference>
+               <WebstorePlatform>3PV</WebstorePlatform>
+               <WebstorePlatformVersion>10.0</WebstorePlatformVersion>
+               <ShippingSystemPlatform>Platform</ShippingSystemPlatform>
+               <ShippingSystemPlatformVersion>5</ShippingSystemPlatformVersion>
+               <PlugIn>plugin</PlugIn>
+               <PlugInVersion>4</PlugInVersion>
+            </ServiceHeader>
+         </Request>
+         <RequestedShipment>
+            <ShipmentInfo>
+               <DropOffType>REGULAR_PICKUP</DropOffType>
+               <ServiceType>{service_type}</ServiceType>
+               <Billing>
+                  <ShipperAccountNumber>{account_number}</ShipperAccountNumber>
+                  <ShippingPaymentType>{payment_type}</ShippingPaymentType>
+                  <DutyAndTaxPayerAccountNumber>{account_number}</DutyAndTaxPayerAccountNumber>
+               </Billing>
+               <SpecialServices>
+                  <Service>
+                     <ServiceType>DD</ServiceType>
+                  </Service>
+               </SpecialServices>
+               <Currency>{package.get('currency', 'USD')}</Currency>
+               <UnitOfMeasurement>SU</UnitOfMeasurement>
+               <LabelType>ZPL</LabelType>
+               <LabelTemplate>ECOM26_84_001</LabelTemplate>
+               <ArchiveLabelTemplate>ARCH_8x4</ArchiveLabelTemplate>
+            </ShipmentInfo>
+            <ShipTimestamp>{self._get_valid_ship_timestamp()}</ShipTimestamp>
+            <PickupLocationCloseTime>18:00</PickupLocationCloseTime>
+            <SpecialPickupInstruction>I DECLARE ALL INFORMATION TRUE And CORRECT</SpecialPickupInstruction>
+            <PickupLocation>{self._clean_text(shipper.get('address', 'Test Location'))}</PickupLocation>
+            <PaymentInfo>DDP</PaymentInfo>
+            <InternationalDetail>
+               <Commodities>
+                  <Description>{self._clean_text(package.get('description', 'General Merchandise'))}</Description>
+                  <CustomsValue>{package.get('value', 100)}</CustomsValue>
+               </Commodities>
+               <Content>NON_DOCUMENTS</Content>
+            </InternationalDetail>
+            <Ship>
+               <Shipper>
+                  <Contact>
+                     <PersonName>{self._clean_text(shipper.get('name', 'Test Shipper'))}</PersonName>
+                     <CompanyName>{self._clean_text(shipper.get('company', 'Test Company'))}</CompanyName>
+                     <PhoneNumber>{self._clean_phone(shipper.get('phone', '507431-2600'))}</PhoneNumber>
+                     <EmailAddress>{shipper.get('email', 'shipper_test@dhl.com')}</EmailAddress>
+                     <MobilePhoneNumber>{self._clean_phone(shipper.get('phone', '507431-2600'))}</MobilePhoneNumber>
+                  </Contact>
+                  <Address>
+                     <StreetLines>{self._clean_text(shipper.get('address', 'Test Address'))}</StreetLines>
+                     <StreetName>{self._clean_text(shipper.get('address', 'Test Street'))}</StreetName>
+                     <StreetNumber>{self._clean_text(shipper.get('address2', 'Building 1'))}</StreetNumber>
+                     <StreetLines2>.</StreetLines2>
+                     <StreetLines3>{self._clean_text(shipper.get('address3', 'Floor 1'))}</StreetLines3>
+                     <City>{self._clean_text(shipper.get('city', 'Test City'))}</City>
+                     <StateOrProvinceCode>{self._clean_text(shipper.get('state', 'XX'))}</StateOrProvinceCode>
+                     <PostalCode>{shipper.get('postalCode', '0')}</PostalCode>
+                     <CountryCode>{shipper.get('country', 'US')}</CountryCode>
+                  </Address>
+               </Shipper>
+               <Recipient>
+                  <Contact>
+                     <PersonName>{self._clean_text(recipient.get('name', 'Test Recipient'))}</PersonName>
+                     <CompanyName>{self._clean_text(recipient.get('company', 'Test Company'))}</CompanyName>
+                     <PhoneNumber>{self._clean_phone(recipient.get('phone', '1234567890'))}</PhoneNumber>
+                     <EmailAddress>{recipient.get('email', 'recipient_test@example.com')}</EmailAddress>
+                     <MobilePhoneNumber>{self._clean_phone(recipient.get('phone', '1234567890'))}</MobilePhoneNumber>
+                  </Contact>
+                  <Address>
+                     <StreetLines>{self._clean_text(recipient.get('address', 'Test Address'))}</StreetLines>
+                     <StreetName>{self._clean_text(recipient.get('address', 'Test Street'))}</StreetName>
+                     <StreetLines2>{self._clean_text(recipient.get('address2', 'Apt 1'))}</StreetLines2>
+                     <City>{self._clean_text(recipient.get('city', 'Test City'))}</City>
+                     <PostalCode>{recipient.get('postalCode', '0')}</PostalCode>
+                     <CountryCode>{recipient.get('country', 'US')}</CountryCode>
+                  </Address>
+                  <RegistrationNumbers>
+                     <RegistrationNumber>
+                        <Number>{recipient.get('vat', '123456789')}</Number>
+                        <NumberTypeCode>VAT</NumberTypeCode>
+                        <NumberIssuerCountryCode>{recipient.get('country', 'US')}</NumberIssuerCountryCode>
+                     </RegistrationNumber>
+                  </RegistrationNumbers>
+               </Recipient>
+            </Ship>
+            <Packages>{self._generate_packages_xml(packages if packages else [package], message_ref)}
+            </Packages>
+         </RequestedShipment>
+      </ship:ShipmentRequest>
+   </soapenv:Body>
+</soapenv:Envelope>"""
+            # Usar la URL exacta del ejemplo
+            endpoint_url = "https://wsbexpress.dhl.com:443/sndpt/expressRateBook"
+            headers = {
+                'Content-Type': 'text/xml; charset=utf-8',
+                'SOAPAction': soap_action
+            }
             response = requests.post(
-                self.endpoints["shipment"],
-                headers=self._get_headers(soap_action),
+                endpoint_url,
+                headers=headers,
                 data=soap_body
             )
-            
             return self._parse_response(response, "Shipment")
-            
         except Exception as e:
             return {"success": False, "message": f"Error en create_shipment: {str(e)}"}
 
     def _parse_response(self, response, service_type):
-        """Parsea la respuesta XML de DHL"""
+        """Parsea la respuesta XML de DHL con manejo mejorado"""
         try:
             if response.status_code == 200:
                 # Parsear XML
                 root = ET.fromstring(response.text)
                 
+                # Verificar si es un fault response
+                if self._is_fault_response(root):
+                    return self._parse_fault_response(root)
+                
                 # Buscar elementos específicos según el tipo de servicio
                 if service_type == "ePOD":
-                    # Buscar datos PDF en la respuesta usando múltiples enfoques
-                    pdf_data = None
-                    
-                    # Método 1: Usar namespace-aware search
-                    for elem in root.iter():
-                        if elem.tag.endswith('Img') and elem.get('Img'):
-                            pdf_data = elem.get('Img')
-                            break
-                    
-                    # Método 2: Si no se encontró, buscar directamente en el texto
-                    if not pdf_data and 'Img="' in response.text:
-                        import re
-                        match = re.search(r'Img="([^"]+)"', response.text)
-                        if match:
-                            pdf_data = match.group(1)
-                    
-                    if pdf_data:
-                        return {
-                            "success": True,
-                            "pdf_data": pdf_data,
-                            "message": "PDF obtenido exitosamente"
-                        }
-                    else:
-                        return {
-                            "success": False,
-                            "message": "No se encontró PDF en la respuesta",
-                            "raw_response": response.text[:1000]  # Primeros 1000 chars para debug
-                        }
-                
+                    return self._parse_epod_response(root, response.text)
                 elif service_type == "Rate":
-                    # Buscar tarifas en la respuesta
-                    rates = []
-                    rate_elements = root.findall(".//Rate")
-                    for rate in rate_elements:
-                        service_name_elem = rate.find("ServiceName")
-                        total_net_elem = rate.find("TotalNet")
-                        currency_elem = rate.find("CurrencyCode")
-                        delivery_time_elem = rate.find("DeliveryTime")
-                        
-                        rates.append({
-                            "service": service_name_elem.text if service_name_elem is not None else "Unknown",
-                            "price": total_net_elem.text if total_net_elem is not None else "0",
-                            "currency": currency_elem.text if currency_elem is not None else "USD",
-                            "delivery_time": delivery_time_elem.text if delivery_time_elem is not None else "Unknown"
-                        })
-                    
-                    return {
-                        "success": True,
-                        "rates": rates,
-                        "message": f"Se encontraron {len(rates)} tarifas disponibles"
-                    }
-                
+                    return self._parse_rate_response(root, response.text)
                 elif service_type == "Tracking":
-                    # Buscar información de seguimiento
-                    events = []
-                    event_elements = root.findall(".//ArrayOfShipmentEventItem")
-                    for event in event_elements:
-                        date_elem = event.find("Date")
-                        time_elem = event.find("Time")
-                        desc_elem = event.find(".//Description")
-                        
-                        events.append({
-                            "date": date_elem.text if date_elem is not None else "",
-                            "time": time_elem.text if time_elem is not None else "",
-                            "location": desc_elem.text if desc_elem is not None else "",
-                            "description": desc_elem.text if desc_elem is not None else ""
-                        })
-                    
-                    awb_elem = root.find(".//AWBNumber")
-                    return {
-                        "success": True,
-                        "tracking": {
-                            "tracking_number": awb_elem.text if awb_elem is not None else "",
-                            "status": "Delivered" if events else "In Transit",
-                            "events": events
-                        },
-                        "message": "Información de seguimiento obtenida"
-                    }
-                
+                    return self._parse_tracking_response(root, response.text)
                 elif service_type == "Shipment":
-                    # Buscar número de tracking en la respuesta
-                    tracking_number = root.find(".//AWBNumber")
-                    if tracking_number is not None:
-                        return {
-                            "success": True,
-                            "tracking_number": tracking_number.text,
-                            "message": "Envío creado exitosamente"
-                        }
-                    else:
-                        return {
-                            "success": False,
-                            "message": "No se pudo obtener el número de tracking"
-                        }
-                
+                    return self._parse_shipment_response(root, response.text)
                 else:
                     return {
                         "success": True,
@@ -701,20 +626,399 @@ class DHLService:
                     }
             
             else:
-                return {
-                    "success": False,
-                    "message": f"Error HTTP {response.status_code}: {response.text}"
-                }
+                return self._handle_http_error(response)
                 
         except ET.ParseError as e:
             return {
                 "success": False,
+                "error_type": "xml_parse_error",
                 "message": f"Error parseando XML: {str(e)}",
-                "raw_response": response.text
+                "raw_response": response.text[:500]
             }
         except Exception as e:
             return {
                 "success": False,
+                "error_type": "unknown_error",
                 "message": f"Error procesando respuesta: {str(e)}",
-                "raw_response": response.text
+                "raw_response": response.text[:500]
             }
+    
+    def _is_fault_response(self, root):
+        """Verifica si la respuesta es un fault"""
+        fault_elements = root.findall('.//{http://schemas.xmlsoap.org/soap/envelope/}Fault')
+        return len(fault_elements) > 0
+    
+    def _parse_fault_response(self, root):
+        """Parsea respuesta de error/fault"""
+        fault_elements = root.findall('.//{http://schemas.xmlsoap.org/soap/envelope/}Fault')
+        
+        if fault_elements:
+            fault = fault_elements[0]
+            fault_code = fault.find('.//{http://schemas.xmlsoap.org/soap/envelope/}faultcode')
+            fault_string = fault.find('.//{http://schemas.xmlsoap.org/soap/envelope/}faultstring')
+            
+            return {
+                "success": False,
+                "error_type": "soap_fault",
+                "fault_code": fault_code.text if fault_code is not None else "Unknown",
+                "fault_string": fault_string.text if fault_string is not None else "Unknown error",
+                "message": f"Error SOAP: {fault_string.text if fault_string is not None else 'Unknown error'}"
+            }
+        
+        return {
+            "success": False,
+            "error_type": "unknown_fault",
+            "message": "Error desconocido en respuesta"
+        }
+    
+    def _parse_epod_response(self, root, response_text):
+        """Parser mejorado para respuestas ePOD"""
+        # Buscar datos PDF con múltiples estrategias
+        pdf_data = None
+        
+        # Estrategia 1: Atributo Img en cualquier elemento
+        for elem in root.iter():
+            if elem.get('Img'):
+                pdf_data = elem.get('Img')
+                break
+        
+        # Estrategia 2: Elemento con texto que parece PDF
+        if not pdf_data:
+            for elem in root.iter():
+                if elem.text and len(elem.text) > 100:
+                    # Verificar si parece base64 de PDF
+                    if elem.text.startswith('JVBERi') or elem.text.startswith('%PDF'):
+                        pdf_data = elem.text
+                        break
+        
+        # Estrategia 3: Regex en texto completo
+        if not pdf_data:
+            import re
+            pdf_match = re.search(r'Img="([^"]*JVBERi[^"]*)"', response_text)
+            if pdf_match:
+                pdf_data = pdf_match.group(1)
+        
+        if pdf_data:
+            # Validar que sea base64 válido
+            try:
+                import base64
+                base64.b64decode(pdf_data)
+                return {
+                    "success": True,
+                    "pdf_data": pdf_data,
+                    "format": "base64",
+                    "size": len(pdf_data),
+                    "message": "PDF obtenido exitosamente"
+                }
+            except Exception:
+                return {
+                    "success": False,
+                    "message": "Datos PDF inválidos",
+                    "pdf_preview": pdf_data[:100] if pdf_data else None
+                }
+        else:
+            return {
+                "success": False,
+                "message": "No se encontró PDF en la respuesta",
+                "elements_found": self._get_element_summary(root)
+            }
+                
+    def _parse_rate_response(self, root, response_text):
+        """Parser mejorado para respuestas de cotización"""
+        rates = []
+        
+        # Buscar servicios usando múltiples estrategias
+        service_elements = root.findall('.//Service') + root.findall('.//*[contains(local-name(), "Service")]')
+        
+        for service_elem in service_elements:
+            rate = {}
+            
+            # Extraer información del servicio
+            for child in service_elem:
+                tag_name = child.tag.split('}')[-1] if '}' in child.tag else child.tag
+                
+                if tag_name == 'ServiceType':
+                    rate['service_code'] = child.text
+                elif tag_name == 'ServiceName':
+                    rate['service_name'] = child.text
+                elif tag_name == 'TotalNet':
+                    # Buscar monto y moneda
+                    for net_child in child:
+                        net_tag = net_child.tag.split('}')[-1] if '}' in net_child.tag else net_child.tag
+                        if net_tag == 'Amount':
+                            try:
+                                rate['total_charge'] = float(net_child.text) if net_child.text else 0
+                            except ValueError:
+                                rate['total_charge'] = 0
+                        elif net_tag == 'Currency':
+                            rate['currency'] = net_child.text
+                elif tag_name == 'DeliveryTime':
+                    # Extraer tiempo de entrega
+                    delivery_parts = []
+                    for dt_child in child:
+                        if dt_child.text:
+                            delivery_parts.append(dt_child.text)
+                    rate['delivery_time'] = ' '.join(delivery_parts) if delivery_parts else 'Unknown'
+            
+            if rate.get('service_code'):
+                # Asegurar valores por defecto
+                rate.setdefault('service_name', f"Service {rate['service_code']}")
+                rate.setdefault('total_charge', 0.0)
+                rate.setdefault('currency', 'USD')
+                rate.setdefault('delivery_time', 'Unknown')
+                
+                rates.append(rate)
+        
+        return {
+            "success": True,
+            "rates": rates,
+            "total_rates": len(rates),
+            "message": f"Se encontraron {len(rates)} tarifas disponibles"
+        }
+
+    def _parse_tracking_response(self, root, response_text):
+        """Parser mejorado para respuestas de tracking"""
+        # Extraer información del envío
+        shipment_info = {}
+        events = []
+        
+        # Buscar AWB Number
+        awb_elements = root.findall('.//AWBNumber') + root.findall('.//*[contains(local-name(), "AWBNumber")]')
+        if awb_elements:
+            shipment_info['tracking_number'] = awb_elements[0].text
+        
+        # Buscar estado
+        status_elements = root.findall('.//Status') + root.findall('.//*[contains(local-name(), "Status")]')
+        for status_elem in status_elements:
+            if status_elem.text:
+                shipment_info['status'] = status_elem.text
+                break
+            # Buscar en elementos hijos
+            for child in status_elem:
+                if child.text:
+                    shipment_info['status'] = child.text
+                    break
+        
+        # Buscar información del envío
+        weight_elements = root.findall('.//Weight') + root.findall('.//*[contains(local-name(), "Weight")]')
+        if weight_elements and weight_elements[0].text:
+            shipment_info['weight'] = weight_elements[0].text
+        
+        # Buscar eventos
+        event_elements = root.findall('.//*[contains(local-name(), "Event")]')
+        for event_elem in event_elements:
+            event = {}
+            for child in event_elem:
+                tag_name = child.tag.split('}')[-1] if '}' in child.tag else child.tag
+                event[tag_name.lower()] = child.text
+            
+            if event:
+                events.append(event)
+        
+        return {
+            "success": True,
+            "tracking_info": shipment_info,
+            "events": events,
+            "total_events": len(events),
+            "message": "Información de seguimiento obtenida"
+        }
+
+    def _parse_shipment_response(self, root, response_text):
+        """Parser mejorado para respuestas de creación de envío"""
+        # Check for notification errors first
+        notification_elements = root.findall('.//*[contains(local-name(), "Notification")]')
+        errors = []
+        
+        for notification in notification_elements:
+            code = notification.get('code')
+            message_elem = notification.find('.//*[contains(local-name(), "Message")]')
+            if message_elem is not None and message_elem.text:
+                error_info = {
+                    'code': code,
+                    'message': message_elem.text
+                }
+                
+                # Agregar información específica para errores comunes
+                if code == '998':
+                    error_info['error_type'] = 'INVALID_DATE'
+                    error_info['suggestion'] = 'Verificar que la fecha de envío sea futura y no más de 10 días adelante'
+                elif code == '999':
+                    error_info['error_type'] = 'PROCESS_FAILURE'
+                    error_info['suggestion'] = 'Error interno del sistema. Reintentar o contactar soporte técnico'
+                elif code in ['400', '401', '402', '403']:
+                    error_info['error_type'] = 'VALIDATION_ERROR'
+                    error_info['suggestion'] = 'Verificar datos del envío (direcciones, pesos, dimensiones)'
+                else:
+                    error_info['error_type'] = 'UNKNOWN_ERROR'
+                    error_info['suggestion'] = 'Verificar datos del envío y reintentar'
+                
+                errors.append(error_info)
+        
+        if errors:
+            # Crear mensaje detallado
+            error_messages = []
+            for error in errors:
+                error_messages.append(f"Error {error['code']}: {error['message']}")
+            
+            return {
+                "success": False,
+                "errors": errors,
+                "message": f"Error en creación de envío: {'; '.join(error_messages)}",
+                "error_summary": f"Se encontraron {len(errors)} errores en la solicitud de envío",
+                "next_steps": "Revise los datos del envío y las sugerencias para cada error"
+            }
+        
+        # Buscar número de tracking
+        tracking_elements = root.findall('.//AWBNumber') + root.findall('.//*[contains(local-name(), "AWBNumber")]')
+        
+        if tracking_elements:
+            return {
+                "success": True,
+                "tracking_number": tracking_elements[0].text,
+                "message": "Envío creado exitosamente"
+            }
+        else:
+            # Buscar otros posibles elementos de éxito
+            success_elements = root.findall('.//*[contains(local-name(), "ShipmentIdentificationNumber")]')
+            if success_elements:
+                return {
+                    "success": True,
+                    "tracking_number": success_elements[0].text,
+                    "message": "Envío creado exitosamente (usando ShipmentIdentificationNumber)"
+                }
+            
+            return {
+                "success": False,
+                "message": "No se pudo obtener el número de tracking",
+                "elements_found": self._get_element_summary(root),
+                "raw_response": response_text[:500] + "..." if len(response_text) > 500 else response_text
+            }
+
+    def _handle_http_error(self, response):
+        """Maneja errores HTTP de manera mejorada"""
+        if response.status_code == 401:
+            return {
+                "success": False,
+                "error_code": "AUTH_ERROR",
+                "message": "Credenciales inválidas. Verificar username/password.",
+                "suggestion": "Contactar con DHL para verificar credenciales"
+            }
+        elif response.status_code == 403:
+            return {
+                "success": False,
+                "error_code": "ACCESS_DENIED",
+                "message": "Acceso denegado. Cuenta sin permisos suficientes.",
+                "suggestion": "Verificar permisos de la cuenta DHL"
+            }
+        elif response.status_code == 404:
+            return {
+                "success": False,
+                "error_code": "ENDPOINT_NOT_FOUND",
+                "message": "Endpoint no encontrado.",
+                "suggestion": "Verificar URL del endpoint"
+            }
+        elif response.status_code == 500:
+            return {
+                "success": False,
+                "error_code": "SERVER_ERROR",
+                "message": "Error interno del servidor DHL.",
+                "suggestion": "Reintentar más tarde"
+            }
+        else:
+            return {
+                "success": False,
+                "error_code": "HTTP_ERROR",
+                "message": f"Error HTTP {response.status_code}",
+                "response": response.text[:200]
+            }
+
+    def _get_element_summary(self, root):
+        """Obtiene resumen de elementos en el XML"""
+        elements = []
+        for elem in root.iter():
+            tag_name = elem.tag.split('}')[-1] if '}' in elem.tag else elem.tag
+            elements.append({
+                'tag': tag_name,
+                'has_text': bool(elem.text and elem.text.strip()),
+                'has_attributes': bool(elem.attrib),
+                'attributes': list(elem.attrib.keys()) if elem.attrib else []
+            })
+        return elements[:10]  # Primeros 10 elementos
+    
+    def _generate_packages_xml(self, packages, message_ref):
+        """Generate packages XML for multiple packages"""
+        if not packages:
+            # Single package default
+            return f"""
+               <RequestedPackages number="1">
+                  <Weight>0.3</Weight>
+                  <Dimensions>
+                     <Length>21</Length>
+                     <Width>16</Width>
+                     <Height>11</Height>
+                  </Dimensions>
+                  <CustomerReferences>{message_ref}</CustomerReferences>
+                  <CustomerReferenceType>SH</CustomerReferenceType>
+               </RequestedPackages>"""
+        
+        packages_xml = ""
+        for i, package in enumerate(packages, 1):
+            packages_xml += f"""
+               <RequestedPackages number="{i}">
+                  <Weight>{package.get('weight', 0.3)}</Weight>
+                  <Dimensions>
+                     <Length>{package.get('length', 21)}</Length>
+                     <Width>{package.get('width', 16)}</Width>
+                     <Height>{package.get('height', 11)}</Height>
+                  </Dimensions>
+                  <CustomerReferences>{package.get('reference', message_ref)}</CustomerReferences>
+                  <CustomerReferenceType>SH</CustomerReferenceType>
+               </RequestedPackages>"""
+        
+        return packages_xml
+    
+    def _get_valid_ship_timestamp(self, requested_date=None):
+        """Get a valid ship timestamp within DHL's requirements (not in past, not more than 10 days future)"""
+        from datetime import datetime, timedelta
+        import pytz
+        
+        # Usar UTC para consistencia
+        now = datetime.now(pytz.UTC)
+        
+        if requested_date:
+            try:
+                # Parse the requested date
+                if isinstance(requested_date, str):
+                    # Manejar diferentes formatos de fecha
+                    if 'GMT' in requested_date:
+                        requested_date = requested_date.replace('GMT+00:00', '+00:00')
+                    requested_date = datetime.fromisoformat(requested_date.replace('Z', '+00:00'))
+                    if requested_date.tzinfo is None:
+                        requested_date = requested_date.replace(tzinfo=pytz.UTC)
+                elif isinstance(requested_date, datetime):
+                    if requested_date.tzinfo is None:
+                        requested_date = requested_date.replace(tzinfo=pytz.UTC)
+                else:
+                    raise ValueError("Invalid date format")
+                
+                # Check if it's within valid range (not in past, not more than 10 days future)
+                # Agregar un margen de 1 hora para evitar problemas de zona horaria
+                if requested_date <= now + timedelta(hours=1):
+                    # If in past or too close, use tomorrow at 10 AM
+                    ship_date = (now + timedelta(days=1)).replace(hour=10, minute=0, second=0, microsecond=0)
+                elif requested_date > now + timedelta(days=9):  # Usar 9 días para ser más conservador
+                    # If more than 9 days future, use 9 days from now
+                    ship_date = (now + timedelta(days=9)).replace(hour=10, minute=0, second=0, microsecond=0)
+                else:
+                    # Date is valid, but ensure it's at least 1 hour from now
+                    ship_date = max(requested_date, now + timedelta(hours=1))
+                    
+            except (ValueError, TypeError) as e:
+                # Invalid date format, use default
+                ship_date = (now + timedelta(days=1)).replace(hour=10, minute=0, second=0, microsecond=0)
+        else:
+            # No date provided, use tomorrow at 10 AM
+            ship_date = (now + timedelta(days=1)).replace(hour=10, minute=0, second=0, microsecond=0)
+        
+        # Formatear según lo que espera DHL
+        return ship_date.strftime('%Y-%m-%dT%H:%M:%S') + 'GMT+00:00'

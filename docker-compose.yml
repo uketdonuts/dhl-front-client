@@ -14,13 +14,12 @@ services:
     environment:
       - DEBUG=True
       - SECRET_KEY=tu-clave-secreta-super-segura-cambiala-en-produccion
-      - ALLOWED_HOSTS=localhost,127.0.0.1,0.0.0.0
+      - ALLOWED_HOSTS=localhost,127.0.0.1,0.0.0.0,backend,backend:8000
       - DB_NAME=dhl_db
       - DB_USER=dhl_user
       - DB_PASSWORD=dhl_password
       - DB_HOST=postgres
       - DB_PORT=5432
-
       - DHL_USERNAME=apO3fS5mJ8zT7h
       - DHL_PASSWORD=J^4oF@1qW!0qS!5b
       - DHL_BASE_URL=https://wsbexpress.dhl.com
@@ -35,10 +34,16 @@ services:
     depends_on:
       - postgres
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 512M
     command: >
       sh -c "python manage.py migrate &&
              python manage.py collectstatic --noinput &&
-             gunicorn --bind 0.0.0.0:8000 --workers 3 --timeout 120 dhl_project.wsgi:application"
+             gunicorn --bind 0.0.0.0:8000 --workers 2 --timeout 300 --max-requests 1000 --max-requests-jitter 100 --worker-class sync dhl_project.wsgi:application"
 
   # Frontend React
   frontend:
@@ -49,9 +54,15 @@ services:
     ports:
       - "3002:3000"
     environment:
-      - REACT_APP_API_URL=http://backend:8000/api
-      - REACT_APP_BACKEND_URL=http://backend:8000/api
+      - REACT_APP_API_URL=/api
+      - REACT_APP_BACKEND_URL=/api
       - REACT_APP_ENVIRONMENT=development
+      - GENERATE_SOURCEMAP=false
+      - FAST_REFRESH=false
+      - WDS_SOCKET_HOST=localhost
+      - WDS_SOCKET_PORT=3002
+      - WATCHPACK_POLLING=true
+      - CHOKIDAR_USEPOLLING=true
     volumes:
       - ./frontend:/app
       - /app/node_modules
@@ -60,6 +71,12 @@ services:
     depends_on:
       - backend
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 256M
 
   # Base de datos PostgreSQL
   postgres:

@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { useAuth } from '../contexts/AuthContext';
+import AccountDropdown from './AccountDropdown';
 
-const Dashboard = () => {
+const Dashboard = ({ selectedAccount, setSelectedAccount }) => {
   const { isAuthenticated, user } = useAuth();
   const [activeTab, setActiveTab] = useState('rate');
   const [shipmentId, setShipmentId] = useState('2287013540');
@@ -213,7 +214,13 @@ const Dashboard = () => {
     setResult(null);
 
     try {
-      const response = await axios.post('/api/dhl/shipment/', shipmentData, {
+      // Incluir la cuenta seleccionada en los datos del envío
+      const shipmentDataWithAccount = {
+        ...shipmentData,
+        account_number: selectedAccount
+      };
+
+      const response = await axios.post('/api/dhl/shipment/', shipmentDataWithAccount, {
         headers: getAuthHeaders()
       });
       
@@ -685,6 +692,31 @@ const Dashboard = () => {
                   </svg>
                   Datos de Prueba
                 </button>
+              </div>
+            </div>
+
+            {/* Selector de Cuenta DHL */}
+            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-3">
+                  <div className="flex items-center">
+                    <svg className="w-5 h-5 text-red-600 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-4m-5 0H9m0 0H7m2 0v-3a1 1 0 011-1h1a1 1 0 011 1v3M9 7h6m0 0v2m0-2h2m-2 2v2m0-2H9m8-2V5" />
+                    </svg>
+                    <label className="text-sm font-medium text-gray-700">
+                      Cuenta de envío DHL:
+                    </label>
+                  </div>
+                  <AccountDropdown
+                    value={selectedAccount}
+                    onChange={setSelectedAccount}
+                  />
+                </div>
+                <div className="text-xs text-gray-500">
+                  <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                    Cuenta actual: {selectedAccount}
+                  </span>
+                </div>
               </div>
             </div>
 
