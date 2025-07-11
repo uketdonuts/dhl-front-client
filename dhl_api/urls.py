@@ -36,4 +36,13 @@ urlpatterns = [
     path('test/shipment-new-format/', test_views.test_shipment_new_format, name='test_shipment_new_format'),
     path('test/shipment-direct-service/', test_views.test_shipment_direct_service, name='test_shipment_direct_service'),
     path('test/connection-status/', test_views.test_connection_status, name='test_connection_status'),
+    
+    # Endpoints para gestión de cuentas DHL
+    path('accounts/', views.dhl_account_list, name='dhl_account_list'),
+    path('accounts/create/', views.dhl_account_create, name='dhl_account_create'),
+    path('accounts/<int:account_id>/delete/', views.dhl_account_delete, name='dhl_account_delete'),
+    path('accounts/<int:account_id>/set-default/', views.dhl_account_set_default, name='dhl_account_set_default'),
+    
+    # Endpoint de prueba para tracking
+    path('test-tracking/', views.test_tracking_view, name='test_tracking'),
 ]

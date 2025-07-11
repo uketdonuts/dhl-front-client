@@ -10,12 +10,9 @@ from django.views.decorators.cache import cache_page
 from django.core.cache import cache
 import logging
 from datetime import datetime
-
-from .serializers import (
-    RateRequestSerializer, TrackingRequestSerializer, EPODRequestSerializer,
-    ShipmentRequestSerializer, LoginSerializer, TestDataSerializer,
-    ShipmentSerializer, RateQuoteSerializer
-)
+from django.utils import timezone
+from .models import DHLAccount
+from .serializers import DHLAccountSerializer
 from .services import DHLService
 from .models import Shipment, RateQuote
 from faker import Faker
@@ -1179,3 +1176,126 @@ def validate_shipment_date_view(request):
             'error_type': 'internal_error',
             'request_timestamp': datetime.now().isoformat()
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def dhl_account_list(request):
+    """
+    Lista todas las cuentas DHL del usuario autenticado
+    """
+    accounts = DHLAccount.objects.filter(created_by=request.user)
+    serializer = DHLAccountSerializer(accounts, many=True)
+    return Response(serializer.data)
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def dhl_account_create(request):
+    """
+    Crea una nueva cuenta DHL y valida su existencia con DHL
+    """
+    serializer = DHLAccountSerializer(data=request.data, context={'request': request})
+    if serializer.is_valid():
+        # Crear la cuenta primero
+        account = serializer.save()
+        
+        try:
+            # Intentar validar la cuenta con DHL
+            dhl_service = DHLService()
+            is_valid = dhl_service.validate_account(account.account_number)
+            
+            # Actualizar el estado de validación
+            account.last_validated = timezone.now()
+            account.validation_status = 'valid' if is_valid else 'invalid'
+            account.save()
+            
+            if not is_valid:
+                return Response({
+                    'success': False,
+                    'message': 'La cuenta no es válida en DHL',
+                    'account': DHLAccountSerializer(account).data
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            return Response({
+                'success': True,
+                'message': 'Cuenta creada y validada correctamente',
+                'account': DHLAccountSerializer(account).data
+            }, status=status.HTTP_201_CREATED)
+            
+        except Exception as e:
+            account.validation_status = 'invalid'
+            account.save()
+            return Response({
+                'success': False,
+                'message': f'Error al validar la cuenta: {str(e)}',
+                'account': DHLAccountSerializer(account).data
+            }, status=status.HTTP_400_BAD_REQUEST)
+    
+    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated])
+def dhl_account_delete(request, account_id):
+    """
+    Elimina una cuenta DHL
+    """
+    try:
+        account = DHLAccount.objects.get(id=account_id, created_by=request.user)
+        account.delete()
+        return Response({
+            'success': True,
+            'message': 'Cuenta eliminada correctamente'
+        })
+    except DHLAccount.DoesNotExist:
+        return Response({
+            'success': False,
+            'message': 'Cuenta no encontrada'
+        }, status=status.HTTP_404_NOT_FOUND)
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def dhl_account_set_default(request, account_id):
+    """
+    Establece una cuenta como predeterminada
+    """
+    try:
+        account = DHLAccount.objects.get(id=account_id, created_by=request.user)
+        account.is_default = True
+        account.save()  # Esto activará el save() personalizado que desactiva otros defaults
+        return Response({
+            'success': True,
+            'message': 'Cuenta establecida como predeterminada',
+            'account': DHLAccountSerializer(account).data
+        })
+    except DHLAccount.DoesNotExist:
+        return Response({
+            'success': False,
+            'message': 'Cuenta no encontrada'
+        }, status=status.HTTP_404_NOT_FOUND)
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def test_tracking_view(request):
+    """
+    Endpoint de prueba para verificar el tracking con números específicos
+    """
+    tracking_numbers = ['5204518792', '5339266472']  # Los números que mencionaste
+    results = {}
+    
+    dhl_service = DHLService()
+    
+    for tracking_number in tracking_numbers:
+        try:
+            result = dhl_service.get_tracking(tracking_number)
+            results[tracking_number] = result
+        except Exception as e:
+            results[tracking_number] = {
+                'success': False,
+                'message': f'Error: {str(e)}'
+            }
+    
+    return Response({
+        'success': True,
+        'test_results': results,
+        'message': 'Pruebas de tracking completadas'
+    })

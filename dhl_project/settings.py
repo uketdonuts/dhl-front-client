@@ -182,7 +182,7 @@ CORS_ALLOW_CREDENTIALS = True
 DHL_USERNAME = config('DHL_USERNAME', default='mydhlapicert')
 DHL_PASSWORD = config('DHL_PASSWORD', default='X!9tA@2xU^1n')
 DHL_BASE_URL = config('DHL_BASE_URL', default='https://wsbexpress.dhl.com')
-DHL_ENVIRONMENT = config('DHL_ENVIRONMENT', default='development')
+DHL_ENVIRONMENT = config('DHL_ENVIRONMENT', default='production')
 
 # Cache configuration
 CACHES = {

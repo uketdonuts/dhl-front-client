@@ -151,3 +151,39 @@ class EPODDocument(models.Model):
     
     def __str__(self):
         return f"ePOD {self.document_id} - {self.shipment.tracking_number}" 
+
+
+class DHLAccount(models.Model):
+    """Modelo para almacenar y gestionar cuentas DHL"""
+    
+    account_number = models.CharField(max_length=20, unique=True)
+    account_name = models.CharField(max_length=100)
+    is_active = models.BooleanField(default=True)
+    is_default = models.BooleanField(default=False)
+    created_by = models.ForeignKey(User, on_delete=models.CASCADE)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    last_validated = models.DateTimeField(null=True, blank=True)
+    validation_status = models.CharField(
+        max_length=20,
+        choices=[
+            ('pending', 'Pendiente'),
+            ('valid', 'Válida'),
+            ('invalid', 'Inválida'),
+        ],
+        default='pending'
+    )
+    
+    class Meta:
+        ordering = ['-is_default', '-created_at']
+        verbose_name = 'Cuenta DHL'
+        verbose_name_plural = 'Cuentas DHL'
+    
+    def __str__(self):
+        return f"{self.account_name} ({self.account_number})"
+    
+    def save(self, *args, **kwargs):
+        # Si esta cuenta se marca como default, quitar el default de otras
+        if self.is_default:
+            DHLAccount.objects.filter(is_default=True).update(is_default=False)
+        super().save(*args, **kwargs) 

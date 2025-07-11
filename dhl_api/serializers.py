@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from django.contrib.auth.models import User
-from .models import Shipment, TrackingEvent, RateQuote, EPODDocument
+from .models import Shipment, TrackingEvent, RateQuote, EPODDocument, DHLAccount
 
 
 class UserSerializer(serializers.ModelSerializer):
@@ -83,3 +83,26 @@ class TestDataSerializer(serializers.Serializer):
     shipper = serializers.DictField()
     recipient = serializers.DictField()
     package = serializers.DictField() 
+
+
+class DHLAccountSerializer(serializers.ModelSerializer):
+    """Serializador para cuentas DHL"""
+    
+    created_by = serializers.HiddenField(default=serializers.CurrentUserDefault())
+    
+    class Meta:
+        model = DHLAccount
+        fields = [
+            'id', 'account_number', 'account_name', 'is_active', 
+            'is_default', 'created_by', 'created_at', 'updated_at',
+            'last_validated', 'validation_status'
+        ]
+        read_only_fields = ['created_at', 'updated_at', 'last_validated', 'validation_status']
+    
+    def validate_account_number(self, value):
+        """Validar que el número de cuenta tenga el formato correcto"""
+        if not value.isdigit() or len(value) < 9:
+            raise serializers.ValidationError(
+                "El número de cuenta debe contener al menos 9 dígitos numéricos"
+            )
+        return value 
