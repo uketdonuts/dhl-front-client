@@ -42,7 +42,4 @@ urlpatterns = [
     path('accounts/create/', views.dhl_account_create, name='dhl_account_create'),
     path('accounts/<int:account_id>/delete/', views.dhl_account_delete, name='dhl_account_delete'),
     path('accounts/<int:account_id>/set-default/', views.dhl_account_set_default, name='dhl_account_set_default'),
-    
-    # Endpoint de prueba para tracking
-    path('test-tracking/', views.test_tracking_view, name='test_tracking'),
 ]

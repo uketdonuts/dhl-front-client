@@ -3,6 +3,9 @@ import xml.etree.ElementTree as ET
 import base64
 from datetime import datetime, timedelta
 import os
+import logging
+
+logger = logging.getLogger(__name__)
 
 class DHLService:
     def __init__(self, username, password, base_url, environment="production"):
@@ -11,14 +14,17 @@ class DHLService:
         self.base_url = base_url
         self.environment = environment
         
+        logger.info(f"Initializing DHLService with environment: {environment}")
+        logger.info(f"Base URL: {base_url}")
+        
         # Configuración por entorno
         if environment == "sandbox":
             # Para sandbox, usar endpoints de prueba específicos
             self.endpoints = {
-                "getePOD": "https://wsbexpress.dhl.com/gbl/getePOD",
-                "rate": "https://wsbexpress.dhl.com/sndpt/expressRateBook",
-                "tracking": "https://wsbexpress.dhl.com/gbl/glDHLExpressTrack",
-                "shipment": "https://wsbexpress.dhl.com/sndpt/expressRateBook"
+                "getePOD": "https://wsbexpress.dhl.com:443/gbl/getePOD",
+                "rate": "https://wsbexpress.dhl.com:443/sndpt/expressRateBook",
+                "tracking": "https://wsbexpress.dhl.com:443/gbl/glDHLExpressTrack",
+                "shipment": "https://wsbexpress.dhl.com:443/sndpt/expressRateBook"
             }
             # Datos de prueba específicos del sandbox
             self.sandbox_data = {
@@ -58,9 +64,9 @@ class DHLService:
         else:
             # URLs de producción - usar endpoints exactos que funcionan
             self.endpoints = {
-                "getePOD": "https://wsbexpress.dhl.com/gbl/getePOD",
+                "getePOD": "https://wsbexpress.dhl.com:443/gbl/getePOD",
                 "rate": "https://wsbexpress.dhl.com:443/sndpt/expressRateBook",
-                "tracking": "https://wsbexpress.dhl.com/gbl/glDHLExpressTrack",
+                "tracking": "https://wsbexpress.dhl.com:443/gbl/glDHLExpressTrack",
                 "shipment": "https://wsbexpress.dhl.com:443/sndpt/expressRateBook"
             }
             self.sandbox_data = {
@@ -68,26 +74,32 @@ class DHLService:
                 "test_tracking": "TU_TRACKING_NUMBER",
                 "test_shipment_id": "TU_SHIPMENT_ID"
             }
+        
+        logger.info(f"Endpoints configured: {self.endpoints}")
 
     def _get_headers(self, soap_action):
         """Genera headers para requests SOAP"""
         import base64
         
-        # Crear header Authorization Basic para ePOD
+        # Crear header Authorization Basic para todas las peticiones
+        credentials = "apO3fS5mJ8zT7h:J^4oF@1qW!0qS!5b"
+        auth_header = base64.b64encode(credentials.encode()).decode()
+        
+        # Headers base que se usan en todas las peticiones
+        headers = {
+            'Content-Type': 'text/xml',
+            'Authorization': f'Basic {auth_header}'
+        }
+        
+        # Agregar SOAPAction si se proporciona
+        if soap_action:
+            headers['SOAPAction'] = soap_action
+        
+        # Agregar Cookie para ePOD
         if "getePOD" in soap_action or "createShipmentRequest" in soap_action:
-            credentials = "apO3fS5mJ8zT7h:J^4oF@1qW!0qS!5b"
-            auth_header = base64.b64encode(credentials.encode()).decode()
-            return {
-                'Content-Type': 'text/xml',
-                'SOAPAction': soap_action,
-                'Authorization': f'Basic {auth_header}',
-                'Cookie': 'BIGipServer~WSB~pl_wsb-express-ash.dhl.com_443=1566607772.64288.0000'
-            }
-        else:
-            return {
-                'Content-Type': 'text/xml',
-                'SOAPAction': soap_action
-            }
+            headers['Cookie'] = 'BIGipServer~WSB~pl_wsb-express-ash.dhl.com_443=1566607772.64288.0000'
+        
+        return headers
 
     def _get_auth_header(self, endpoint_type=None):
         """Genera header de autenticación WS-Security con credenciales específicas por endpoint"""
@@ -324,12 +336,13 @@ class DHLService:
     def get_tracking(self, tracking_number):
         """Obtiene información de seguimiento con validación mejorada"""
         try:
-            # Log del entorno para debugging
-            print(f"🔧 DHL Environment: {self.environment}")
-            print(f"🔧 Tracking number: {tracking_number}")
+            logger.info(f"Starting tracking request for {tracking_number}")
+            logger.info(f"Environment: {self.environment}")
+            logger.info(f"Endpoint: {self.endpoints['tracking']}")
             
             # Validar formato del número de tracking
             if not tracking_number or not str(tracking_number).strip():
+                logger.error("Empty tracking number")
                 return {"success": False, "message": "Número de tracking requerido"}
             
             # Limpiar el número de tracking
@@ -337,133 +350,82 @@ class DHLService:
             
             # Validar que sea numérico y tenga al menos 9 dígitos
             if not tracking_number.isdigit() or len(tracking_number) < 9:
+                logger.error(f"Invalid tracking number format: {tracking_number}")
                 return {"success": False, "message": "Número de tracking inválido. Debe contener al menos 9 dígitos numéricos"}
-            
-            # Para desarrollo/sandbox, simular el seguimiento
-            if self.environment in ["sandbox", "development"]:
-                import random
-                
-                # Generar eventos de seguimiento simulados
-                events = []
-                current_time = datetime.now()
-                
-                # Eventos típicos de DHL
-                event_types = [
-                    {
-                        "code": "PU",
-                        "description": "Picked up by DHL",
-                        "location": "Madrid, Spain",
-                        "timestamp": current_time - timedelta(days=2, hours=3)
-                    },
-                    {
-                        "code": "TR",
-                        "description": "In transit to destination",
-                        "location": "Madrid, Spain",
-                        "timestamp": current_time - timedelta(days=2, hours=1)
-                    },
-                    {
-                        "code": "AR",
-                        "description": "Arrived at destination facility",
-                        "location": "New York, USA",
-                        "timestamp": current_time - timedelta(days=1, hours=6)
-                    },
-                    {
-                        "code": "OFD",
-                        "description": "Out for delivery",
-                        "location": "New York, USA",
-                        "timestamp": current_time - timedelta(hours=2)
-                    }
-                ]
-                
-                # Agregar evento de entrega si el envío está "completado"
-                if random.choice([True, False]):
-                    events.append({
-                        "code": "DL",
-                        "description": "Delivered",
-                        "location": "New York, USA",
-                        "timestamp": current_time - timedelta(hours=1)
-                    })
-                    status = "Delivered"
-                else:
-                    status = "In Transit"
-                
-                # Agregar eventos en orden cronológico
-                for event in event_types:
-                    events.append(event)
-                
-                # Ordenar por timestamp
-                events.sort(key=lambda x: x["timestamp"])
-                
-                # Información del envío
-                shipment_info = {
-                    "awb_number": tracking_number,
-                    "status": status,
-                    "service": "DHL Express Worldwide",
-                    "origin": "Madrid, Spain",
-                    "destination": "New York, USA",
-                    "estimated_delivery": (current_time + timedelta(days=1)).strftime("%Y-%m-%d"),
-                    "weight": "2.5 kg",
-                    "pieces": "1"
-                }
-                
-                return {
-                    "success": True,
-                    "tracking_info": shipment_info,
-                    "events": events,
-                    "message": "Información de seguimiento obtenida (modo sandbox)"
-                }
-            
-            # Para producción, usar el endpoint real con formato exacto del ejemplo
-            soap_action = "glDHLExpressTrack_providers_services_trackShipment_Binder_trackShipmentRequest"
             
             # Usar el formato exacto del ejemplo que funciona
             soap_body = f"""<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:trac="http://scxgxtt.phx-dc.dhl.com/glDHLExpressTrack/providers/services/trackShipment" xmlns:dhl="http://www.dhl.com">
-	<soapenv:Header>
-		<wsse:Security soapenv:mustUnderstand="1" xmlns:wsse="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd">
-			<wsse:UsernameToken>
-				<wsse:Username>{self.username}</wsse:Username>
-				<wsse:Password>{self.password}</wsse:Password>
-			</wsse:UsernameToken>
-		</wsse:Security>
-	</soapenv:Header>
-	<soapenv:Body>
-		<trac:trackShipmentRequest>
-			<trackingRequest>
-				<dhl:TrackingRequest>
-					<Request>
-						<ServiceHeader>
-							<MessageTime>{datetime.now().strftime('%Y-%m-%dT%H:%M:%S.%fZ')[:-3]}Z</MessageTime>
-							<MessageReference>123456789123456789123456789123</MessageReference>
-						</ServiceHeader>
-					</Request>
-					<AWBNumber>
-						<ArrayOfAWBNumberItem>{tracking_number}</ArrayOfAWBNumberItem>
-					</AWBNumber>
-					<LevelOfDetails>ALL_CHECK_POINTS</LevelOfDetails>
-					<PiecesEnabled>B</PiecesEnabled>
-				</dhl:TrackingRequest>
-			</trackingRequest>
-		</trac:trackShipmentRequest>
-	</soapenv:Body>
+    <soapenv:Header>
+        <wsse:Security soapenv:mustUnderstand="1" xmlns:wsse="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd">
+            <wsse:UsernameToken>
+                <wsse:Username>{self.username}</wsse:Username>
+                <wsse:Password>{self.password}</wsse:Password>
+            </wsse:UsernameToken>
+        </wsse:Security>
+    </soapenv:Header>
+    <soapenv:Body>
+        <trac:trackShipmentRequest>
+            <trackingRequest>
+                <dhl:TrackingRequest>
+                    <Request>
+                        <ServiceHeader>
+                            <MessageTime>2014-07-01T13:39:57.938Z</MessageTime>
+                            <MessageReference>123456789123456789123456789123</MessageReference>
+                        </ServiceHeader>
+                    </Request>
+                    <AWBNumber>
+                        <ArrayOfAWBNumberItem>{tracking_number}</ArrayOfAWBNumberItem>
+                    </AWBNumber>
+                    <LevelOfDetails>ALL_CHECK_POINTS</LevelOfDetails>
+                    <PiecesEnabled>B</PiecesEnabled>
+                </dhl:TrackingRequest>
+            </trackingRequest>
+        </trac:trackShipmentRequest>
+    </soapenv:Body>
 </soapenv:Envelope>"""
             
+            # Obtener headers
+            headers = self._get_headers("")
+            logger.debug(f"Request Headers: {headers}")
+            logger.debug(f"Request Body: {soap_body}")
+            
             # Hacer la petición a DHL
+            logger.info("Making request to DHL API...")
             response = requests.post(
                 self.endpoints["tracking"],
-                headers=self._get_headers(soap_action),
+                headers=headers,
                 data=soap_body,
                 verify=False
             )
             
             # Log de la respuesta para debugging
-            print(f"Tracking Response Status: {response.status_code}")
-            print(f"Tracking Response Content: {response.text[:500]}...")
+            logger.info(f"Response Status: {response.status_code}")
+            logger.debug(f"Response Headers: {dict(response.headers)}")
+            logger.debug(f"Response Content Length: {len(response.text)}")
+            logger.debug(f"Response Content: {response.text}")
+            
+            # Verificar si la respuesta es válida
+            if response.status_code != 200:
+                logger.error(f"HTTP Error: {response.status_code}")
+                return self._handle_http_error(response)
             
             # Parsear la respuesta
-            return self._parse_tracking_response(ET.fromstring(response.content), response.text)
+            try:
+                root = ET.fromstring(response.content)
+                logger.info(f"XML Root Tag: {root.tag}")
+                result = self._parse_tracking_response(root, response.text)
+                logger.info(f"Parse Result: {result}")
+                return result
+            except ET.ParseError as e:
+                logger.error(f"XML Parse Error: {str(e)}")
+                return {
+                    "success": False,
+                    "message": f"Error parseando XML de DHL: {str(e)}",
+                    "raw_response": response.text[:500]
+                }
             
         except Exception as e:
-            print(f"Error en get_tracking para {tracking_number}: {str(e)}")
+            logger.exception(f"Error in get_tracking for {tracking_number}")
             return {"success": False, "message": f"Error en get_tracking: {str(e)}"}
 
     def create_shipment(self, shipment_data):
@@ -877,128 +839,239 @@ class DHLService:
         }
 
     def _parse_tracking_response(self, root, response_text):
-        """Parser mejorado para respuestas de tracking con manejo de errores específicos"""
+        """Parser para la respuesta real de DHL tracking basado en la estructura XML proporcionada"""
         try:
-            # Verificar si hay errores de notificación
-            notification_elements = root.findall('.//*[contains(local-name(), "Notification")]')
-            errors = []
+            logger.info(f"Parsing tracking response with root tag: {root.tag}")
             
-            for notification in notification_elements:
-                code = notification.get('code')
-                message_elem = notification.find('.//*[contains(local-name(), "Message")]')
-                if message_elem is not None and message_elem.text:
-                    error_info = {
-                        'code': code,
-                        'message': message_elem.text
-                    }
-                    
-                    # Agregar información específica para errores de tracking
-                    if code in ['1001', '1002', '1003']:
-                        error_info['error_type'] = 'INVALID_TRACKING_NUMBER'
-                        error_info['suggestion'] = 'El número de tracking no existe o no es válido'
-                    elif code in ['2001', '2002']:
-                        error_info['error_type'] = 'TRACKING_NOT_AVAILABLE'
-                        error_info['suggestion'] = 'La información de tracking no está disponible para este envío'
-                    elif code in ['3001', '3002']:
-                        error_info['error_type'] = 'SERVICE_UNAVAILABLE'
-                        error_info['suggestion'] = 'El servicio de tracking no está disponible temporalmente'
-                    else:
-                        error_info['error_type'] = 'UNKNOWN_ERROR'
-                        error_info['suggestion'] = 'Error desconocido en el servicio de tracking'
-                    
-                    errors.append(error_info)
-            
-            if errors:
-                error_messages = []
-                for error in errors:
-                    error_messages.append(f"Error {error['code']}: {error['message']}")
-                
-                return {
-                    "success": False,
-                    "errors": errors,
-                    "message": f"Error en tracking: {'; '.join(error_messages)}",
-                    "error_summary": f"Se encontraron {len(errors)} errores al consultar el tracking",
-                    "next_steps": "Verificar el número de tracking o intentar más tarde"
-                }
-            
-            # Extraer información del envío
+            # Buscar información básica del envío
             shipment_info = {}
             events = []
             
-            # Buscar AWB Number con múltiples patrones
-            awb_elements = (
-                root.findall('.//AWBNumber') + 
-                root.findall('.//*[contains(local-name(), "AWBNumber")]') +
-                root.findall('.//*[contains(local-name(), "TrackingNumber")]')
-            )
+            # Buscar AWB Number en la estructura real de DHL
+            awb_elements = root.findall('.//AWBNumber')
             if awb_elements:
                 shipment_info['awb_number'] = awb_elements[0].text
                 shipment_info['tracking_number'] = awb_elements[0].text
+                logger.info(f"Found AWB Number: {awb_elements[0].text}")
             
-            # Buscar estado con múltiples patrones
-            status_elements = (
-                root.findall('.//Status') + 
-                root.findall('.//*[contains(local-name(), "Status")]') +
-                root.findall('.//*[contains(local-name(), "ShipmentStatus")]')
-            )
+            # Buscar estado del envío
+            status_elements = root.findall('.//Status')
             for status_elem in status_elements:
-                if status_elem.text:
-                    shipment_info['status'] = status_elem.text
+                action_status = status_elem.find('.//ActionStatus')
+                if action_status is not None and action_status.text:
+                    shipment_info['status'] = action_status.text
+                    logger.info(f"Found Status: {action_status.text}")
                     break
-                # Buscar en elementos hijos
-                for child in status_elem:
-                    if child.text:
-                        shipment_info['status'] = child.text
-                        break
             
-            # Buscar información adicional del envío
-            weight_elements = root.findall('.//Weight') + root.findall('.//*[contains(local-name(), "Weight")]')
-            if weight_elements and weight_elements[0].text:
-                shipment_info['weight'] = weight_elements[0].text
-            
-            # Buscar servicio
-            service_elements = root.findall('.//Service') + root.findall('.//*[contains(local-name(), "Service")]')
-            if service_elements and service_elements[0].text:
-                shipment_info['service'] = service_elements[0].text
-            
-            # Buscar origen y destino
-            origin_elements = root.findall('.//Origin') + root.findall('.//*[contains(local-name(), "Origin")]')
-            if origin_elements and origin_elements[0].text:
-                shipment_info['origin'] = origin_elements[0].text
-            
-            destination_elements = root.findall('.//Destination') + root.findall('.//*[contains(local-name(), "Destination")]')
-            if destination_elements and destination_elements[0].text:
-                shipment_info['destination'] = destination_elements[0].text
-            
-            # Buscar eventos de tracking con múltiples patrones
-            event_elements = (
-                root.findall('.//*[contains(local-name(), "Event")]') +
-                root.findall('.//*[contains(local-name(), "Activity")]') +
-                root.findall('.//*[contains(local-name(), "Checkpoint")]')
-            )
-            
-            for event_elem in event_elements:
-                event = {}
-                for child in event_elem:
-                    tag_name = child.tag.split('}')[-1] if '}' in child.tag else child.tag
-                    if child.text and child.text.strip():
-                        event[tag_name.lower()] = child.text.strip()
+            # Buscar información del envío
+            shipment_info_elem = root.find('.//ShipmentInfo')
+            if shipment_info_elem is not None:
+                # Origen
+                origin_elem = shipment_info_elem.find('.//OriginServiceArea')
+                if origin_elem is not None:
+                    description = origin_elem.find('.//Description')
+                    if description is not None and description.text:
+                        shipment_info['origin'] = description.text
+                        logger.info(f"Found Origin: {description.text}")
                 
-                if event:
-                    # Normalizar campos del evento
-                    if 'code' not in event and 'eventcode' in event:
-                        event['code'] = event['eventcode']
-                    if 'description' not in event and 'eventdescription' in event:
-                        event['description'] = event['eventdescription']
-                    if 'location' not in event and 'servicelocation' in event:
-                        event['location'] = event['servicelocation']
-                    if 'timestamp' not in event and 'date' in event:
-                        event['timestamp'] = event['date']
+                # Destino
+                dest_elem = shipment_info_elem.find('.//DestinationServiceArea')
+                if dest_elem is not None:
+                    description = dest_elem.find('.//Description')
+                    if description is not None and description.text:
+                        shipment_info['destination'] = description.text
+                        logger.info(f"Found Destination: {description.text}")
+                
+                # Peso
+                weight_elem = shipment_info_elem.find('.//Weight')
+                if weight_elem is not None and weight_elem.text:
+                    weight_unit = shipment_info_elem.find('.//WeightUnit')
+                    unit = weight_unit.text if weight_unit is not None else 'K'
+                    shipment_info['weight'] = f"{weight_elem.text} {unit}"
+                    logger.info(f"Found Weight: {weight_elem.text} {unit}")
+                
+                # Piezas
+                pieces_elem = shipment_info_elem.find('.//Pieces')
+                if pieces_elem is not None and pieces_elem.text:
+                    shipment_info['pieces'] = int(pieces_elem.text)
+                    logger.info(f"Found Pieces: {pieces_elem.text}")
+                
+                # Fecha de envío
+                shipment_date = shipment_info_elem.find('.//ShipmentDate')
+                if shipment_date is not None and shipment_date.text:
+                    shipment_info['shipment_date'] = shipment_date.text
+                    logger.info(f"Found Shipment Date: {shipment_date.text}")
+            
+            # Buscar detalles de piezas individuales
+            piece_details = []
+            piece_info_items = root.findall('.//PieceInfo/ArrayOfPieceInfoItem')
+            if piece_info_items:
+                logger.info(f"Found {len(piece_info_items)} piece info items")
+                for piece_item in piece_info_items:
+                    piece_detail = {}
                     
-                    events.append(event)
+                    # Detalles básicos de la pieza
+                    piece_details_elem = piece_item.find('.//PieceDetails')
+                    if piece_details_elem is not None:
+                        # Número de pieza
+                        piece_num = piece_details_elem.find('.//PieceNumber')
+                        if piece_num is not None and piece_num.text:
+                            piece_detail['piece_number'] = piece_num.text
+                        
+                        # License Plate
+                        license_plate = piece_details_elem.find('.//LicensePlate')
+                        if license_plate is not None and license_plate.text:
+                            piece_detail['license_plate'] = license_plate.text
+                        
+                        # Dimensiones reales
+                        actual_depth = piece_details_elem.find('.//ActualDepth')
+                        actual_width = piece_details_elem.find('.//ActualWidth')
+                        actual_height = piece_details_elem.find('.//ActualHeight')
+                        if actual_depth is not None and actual_depth.text:
+                            piece_detail['actual_depth'] = actual_depth.text
+                        if actual_width is not None and actual_width.text:
+                            piece_detail['actual_width'] = actual_width.text
+                        if actual_height is not None and actual_height.text:
+                            piece_detail['actual_height'] = actual_height.text
+                        
+                        # Peso real
+                        actual_weight = piece_details_elem.find('.//ActualWeight')
+                        if actual_weight is not None and actual_weight.text:
+                            piece_detail['actual_weight'] = actual_weight.text
+                        
+                        # Dimensiones declaradas
+                        depth = piece_details_elem.find('.//Depth')
+                        width = piece_details_elem.find('.//Width')
+                        height = piece_details_elem.find('.//Height')
+                        if depth is not None and depth.text:
+                            piece_detail['declared_depth'] = depth.text
+                        if width is not None and width.text:
+                            piece_detail['declared_width'] = width.text
+                        if height is not None and height.text:
+                            piece_detail['declared_height'] = height.text
+                        
+                        # Peso declarado
+                        weight = piece_details_elem.find('.//Weight')
+                        if weight is not None and weight.text:
+                            piece_detail['declared_weight'] = weight.text
+                        
+                        # Tipo de paquete
+                        package_type = piece_details_elem.find('.//PackageType')
+                        if package_type is not None and package_type.text:
+                            piece_detail['package_type'] = package_type.text
+                        
+                        # Peso dimensional
+                        dim_weight = piece_details_elem.find('.//DimWeight')
+                        if dim_weight is not None and dim_weight.text:
+                            piece_detail['dim_weight'] = dim_weight.text
+                        
+                        # Unidad de peso
+                        weight_unit = piece_details_elem.find('.//WeightUnit')
+                        if weight_unit is not None and weight_unit.text:
+                            piece_detail['weight_unit'] = weight_unit.text
+                        
+                        # Convertir a formato más legible
+                        if piece_detail.get('actual_depth') and piece_detail.get('actual_width') and piece_detail.get('actual_height'):
+                            piece_detail['actual_length'] = piece_detail['actual_depth']  # DHL usa depth como length
+                    
+                    if piece_detail:
+                        piece_details.append(piece_detail)
+                        logger.info(f"Parsed piece detail: Piece {piece_detail.get('piece_number', 'N/A')} - {piece_detail.get('license_plate', 'N/A')}")
+            
+            # Buscar eventos de tracking en la estructura real de DHL
+            piece_events = root.findall('.//PieceEvent/ArrayOfPieceEventItem')
+            if piece_events:
+                logger.info(f"Found {len(piece_events)} piece events")
+                for event_elem in piece_events:
+                    event = {}
+                    
+                    # Fecha y hora
+                    date_elem = event_elem.find('.//Date')
+                    time_elem = event_elem.find('.//Time')
+                    if date_elem is not None and time_elem is not None:
+                        event['date'] = date_elem.text
+                        event['time'] = time_elem.text
+                        event['timestamp'] = f"{date_elem.text} {time_elem.text}"
+                    
+                    # Código y descripción del evento
+                    service_event = event_elem.find('.//ServiceEvent')
+                    if service_event is not None:
+                        event_code = service_event.find('.//EventCode')
+                        event_desc = service_event.find('.//Description')
+                        if event_code is not None and event_code.text:
+                            event['code'] = event_code.text
+                        if event_desc is not None and event_desc.text:
+                            event['description'] = event_desc.text
+                    
+                    # Ubicación
+                    service_area = event_elem.find('.//ServiceArea')
+                    if service_area is not None:
+                        description = service_area.find('.//Description')
+                        if description is not None and description.text:
+                            event['location'] = description.text
+                    
+                    # Firmante (para entregas)
+                    signatory = event_elem.find('.//Signatory')
+                    if signatory is not None and signatory.text:
+                        event['signatory'] = signatory.text
+                    
+                    if event:
+                        events.append(event)
+                        logger.info(f"Parsed event: {event.get('code', 'N/A')} - {event.get('description', 'N/A')}")
+            
+            # Si no se encontraron eventos de piezas, buscar eventos de envío generales
+            if not events:
+                shipment_events = root.findall('.//ShipmentEvent/ArrayOfShipmentEventItem')
+                if shipment_events:
+                    logger.info(f"Found {len(shipment_events)} shipment events")
+                    for event_elem in shipment_events:
+                        event = {}
+                        
+                        # Fecha y hora
+                        date_elem = event_elem.find('.//Date')
+                        time_elem = event_elem.find('.//Time')
+                        if date_elem is not None and time_elem is not None:
+                            event['date'] = date_elem.text
+                            event['time'] = time_elem.text
+                            event['timestamp'] = f"{date_elem.text} {time_elem.text}"
+                        
+                        # Código y descripción del evento
+                        service_event = event_elem.find('.//ServiceEvent')
+                        if service_event is not None:
+                            event_code = service_event.find('.//EventCode')
+                            event_desc = service_event.find('.//Description')
+                            if event_code is not None and event_code.text:
+                                event['code'] = event_code.text
+                            if event_desc is not None and event_desc.text:
+                                event['description'] = event_desc.text
+                        
+                        # Ubicación
+                        service_area = event_elem.find('.//ServiceArea')
+                        if service_area is not None:
+                            description = service_area.find('.//Description')
+                            if description is not None and description.text:
+                                event['location'] = description.text
+                        
+                        if event:
+                            events.append(event)
+                            logger.info(f"Parsed shipment event: {event.get('code', 'N/A')} - {event.get('description', 'N/A')}")
+            
+            # Ordenar eventos por fecha y hora
+            events.sort(key=lambda x: f"{x.get('date', '')} {x.get('time', '')}")
+            
+            # Determinar estado final basado en eventos
+            if events:
+                last_event = events[-1]
+                if last_event.get('code') == 'OK':
+                    shipment_info['status'] = 'Delivered'
+                elif last_event.get('code') in ['PU', 'AF', 'PL', 'DF', 'CR', 'CC']:
+                    shipment_info['status'] = 'In Transit'
+                else:
+                    shipment_info['status'] = 'Processing'
             
             # Si no se encontró información básica, puede ser un error
             if not shipment_info.get('awb_number') and not shipment_info.get('tracking_number'):
+                logger.warning("No se encontró información básica de tracking")
                 return {
                     "success": False,
                     "message": "No se encontró información de tracking válida",
@@ -1006,16 +1079,22 @@ class DHLService:
                     "raw_response": response_text[:500] + "..." if len(response_text) > 500 else response_text
                 }
             
+            logger.info(f"Successfully parsed tracking info: {shipment_info}")
+            logger.info(f"Found {len(events)} events")
+            logger.info(f"Found {len(piece_details)} piece details")
+            
             return {
                 "success": True,
                 "tracking_info": shipment_info,
                 "events": events,
+                "piece_details": piece_details,
                 "total_events": len(events),
-                "message": "Información de seguimiento obtenida exitosamente"
+                "total_pieces": len(piece_details),
+                "message": "Información de seguimiento obtenida exitosamente de DHL"
             }
             
         except Exception as e:
-            print(f"Error parsing tracking response: {str(e)}")
+            logger.exception(f"Error parsing tracking response: {str(e)}")
             return {
                 "success": False,
                 "message": f"Error al procesar respuesta de tracking: {str(e)}",

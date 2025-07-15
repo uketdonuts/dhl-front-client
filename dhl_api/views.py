@@ -12,7 +12,16 @@ import logging
 from datetime import datetime
 from django.utils import timezone
 from .models import DHLAccount
-from .serializers import DHLAccountSerializer
+from .serializers import (
+    DHLAccountSerializer,
+    LoginSerializer,
+    RateRequestSerializer,
+    EPODRequestSerializer,
+    ShipmentRequestSerializer,
+    ShipmentSerializer,
+    RateQuoteSerializer,
+    TrackingRequestSerializer
+)
 from .services import DHLService
 from .models import Shipment, RateQuote
 from faker import Faker
@@ -226,95 +235,83 @@ def rate_view(request):
 def tracking_view(request):
     """
     Endpoint para rastrear envíos DHL usando el número de tracking.
-    
-    Este endpoint permite obtener información de seguimiento de envíos DHL
-    utilizando el número de tracking proporcionado. Consulta la API de DHL
-    y devuelve información detallada del estado del envío.
-    
-    **Método HTTP:** POST
-    **Permisos:** Usuario autenticado (IsAuthenticated)
-    
-    **Parámetros de entrada (JSON):**
-    - tracking_number (str): Número de tracking DHL
-    
-    **Respuesta exitosa (200):**
-    {
-        "success": true,
-        "tracking_info": {
-            "tracking_number": "1234567890",
-            "status": "In Transit",
-            "estimated_delivery": "2025-07-10",
-            "origin": {
-                "location": "Frankfurt, Germany",
-                "timestamp": "2025-07-07T08:00:00"
-            },
-            "destination": {
-                "location": "New York, USA",
-                "timestamp": null
-            },
-            "events": [
-                {
-                    "timestamp": "2025-07-07T08:00:00",
-                    "location": "Frankfurt, Germany",
-                    "description": "Shipment picked up"
-                }
-            ]
-        },
-        "request_timestamp": "2025-07-07T10:30:00",
-        "requested_by": "username"
-    }
-    
-    **Respuesta de error (400/500):**
-    {
-        "success": false,
-        "message": "Error descriptivo",
-        "error_type": "validation_error|tracking_error|internal_error",
-        "request_timestamp": "2025-07-07T10:30:00"
-    }
-    
-    **Notas:**
-    - El número de tracking debe ser válido y existir en el sistema DHL
-    - Se registra cada consulta en los logs para auditoría
-    - Los errores se manejan de forma consistente con metadatos
     """
-    serializer = TrackingRequestSerializer(data=request.data)
-    if serializer.is_valid():
-        try:
-            dhl_service = DHLService(
-                username=settings.DHL_USERNAME,
-                password=settings.DHL_PASSWORD,
-                base_url=settings.DHL_BASE_URL,
-                environment=settings.DHL_ENVIRONMENT
-            )
-            result = dhl_service.get_tracking(
-                tracking_number=serializer.validated_data['tracking_number']
-            )
-            
-            # Agregar metadatos adicionales
-            result['request_timestamp'] = datetime.now().isoformat()
-            result['tracking_number'] = serializer.validated_data['tracking_number']
-            result['requested_by'] = request.user.username
-            
-            # Log del resultado para debugging
-            logger.info(f"Tracking request for {serializer.validated_data['tracking_number']} by {request.user.username}: {result.get('success', False)}")
-            
-            return Response(result)
-            
-        except Exception as e:
-            logger.error(f"Error en tracking_view: {str(e)}")
+    try:
+        tracking_number = request.data.get('tracking_number')
+        logger.info(f"Tracking request received for {tracking_number} by {request.user.username}")
+        
+        # Validar número de tracking
+        if not tracking_number:
+            logger.warning("No tracking number provided")
             return Response({
                 'success': False,
-                'message': f'Error interno: {str(e)}',
-                'error_type': 'internal_error',
-                'request_timestamp': datetime.now().isoformat()
-            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-    
-    return Response({
-        'success': False,
-        'message': 'Número de seguimiento requerido',
-        'error_type': 'validation_error',
-        'errors': serializer.errors
-    }, status=status.HTTP_400_BAD_REQUEST)
+                'message': 'Número de tracking requerido',
+                'request_timestamp': datetime.now(),
+                'requested_by': request.user.username
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Obtener cuenta DHL predeterminada o la primera disponible
+        dhl_account = DHLAccount.objects.filter(created_by=request.user).first()
+        if not dhl_account:
+            logger.error(f"No DHL account found for user {request.user.username}")
+            return Response({
+                'success': False,
+                'message': 'No se encontró una cuenta DHL configurada',
+                'request_timestamp': datetime.now(),
+                'requested_by': request.user.username
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        logger.info(f"Using DHL account: {dhl_account.account_name} ({dhl_account.account_number})")
+        
+        # Crear instancia del servicio DHL usando configuración desde settings
+        dhl_service = DHLService(
+            username=settings.DHL_USERNAME,
+            password=settings.DHL_PASSWORD,
+            base_url=settings.DHL_BASE_URL,
+            environment=settings.DHL_ENVIRONMENT
+        )
+        
+        # Obtener información de tracking
+        logger.info(f"Calling DHL service for tracking number {tracking_number}")
+        tracking_info = dhl_service.get_tracking(tracking_number)
+        logger.info(f"DHL service response: {tracking_info}")
+        
+        # Preparar respuesta
+        response_data = {
+            'success': tracking_info.get('success', False),
+            'tracking_info': tracking_info.get('tracking_info', {}),
+            'events': tracking_info.get('events', []),
+            'piece_details': tracking_info.get('piece_details', []),
+            'total_events': tracking_info.get('total_events', 0),
+            'total_pieces': tracking_info.get('total_pieces', 0),
+            'message': tracking_info.get('message', ''),
+            'request_timestamp': datetime.now(),
+            'tracking_number': tracking_number,
+            'requested_by': request.user.username
+        }
+        
+        if not tracking_info.get('success'):
+            logger.warning(f"Tracking failed for {tracking_number}: {tracking_info.get('message')}")
+            response_data.update({
+                'error_code': 'SERVER_ERROR',
+                'suggestion': 'Reintentar más tarde'
+            })
+            return Response(response_data, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
+        logger.info(f"Tracking successful for {tracking_number}")
+        return Response(response_data)
+        
+    except Exception as e:
+        logger.exception(f"Error in tracking_view: {str(e)}")
+        return Response({
+            'success': False,
+            'message': 'Error interno del servidor',
+            'error_code': 'SERVER_ERROR',
+            'suggestion': 'Reintentar más tarde',
+            'request_timestamp': datetime.now(),
+            'tracking_number': tracking_number if 'tracking_number' in locals() else None,
+            'requested_by': request.user.username
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @api_view(['POST'])
@@ -1272,30 +1269,3 @@ def dhl_account_set_default(request, account_id):
             'success': False,
             'message': 'Cuenta no encontrada'
         }, status=status.HTTP_404_NOT_FOUND)
-
-@api_view(['GET'])
-@permission_classes([IsAuthenticated])
-def test_tracking_view(request):
-    """
-    Endpoint de prueba para verificar el tracking con números específicos
-    """
-    tracking_numbers = ['5204518792', '5339266472']  # Los números que mencionaste
-    results = {}
-    
-    dhl_service = DHLService()
-    
-    for tracking_number in tracking_numbers:
-        try:
-            result = dhl_service.get_tracking(tracking_number)
-            results[tracking_number] = result
-        except Exception as e:
-            results[tracking_number] = {
-                'success': False,
-                'message': f'Error: {str(e)}'
-            }
-    
-    return Response({
-        'success': True,
-        'test_results': results,
-        'message': 'Pruebas de tracking completadas'
-    })

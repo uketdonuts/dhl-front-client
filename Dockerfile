@@ -36,4 +36,4 @@ USER django
 EXPOSE 8000
 
 # Comando para ejecutar la aplicación
-CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "3", "--timeout", "120", "dhl_project.wsgi:application"] 
+CMD ["gunicorn", "-c", "gunicorn.conf.py", "dhl_project.wsgi:application"] 

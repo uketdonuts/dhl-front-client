@@ -198,39 +198,53 @@ LOGGING = {
     'disable_existing_loggers': False,
     'formatters': {
         'verbose': {
-            'format': '{levelname} {asctime} {module} {process:d} {thread:d} {message}',
-            'style': '{',
+            'format': '%(levelname)s %(asctime)s %(module)s %(process)d %(thread)d %(message)s',
+            'style': '%',
         },
         'simple': {
-            'format': '{levelname} {message}',
-            'style': '{',
+            'format': '%(levelname)s %(message)s',
+            'style': '%',
+        },
+        'detailed': {
+            'format': '\n-----------------\n%(levelname)s [%(asctime)s] [%(name)s:%(lineno)s] %(message)s',
+            'style': '%',
         },
     },
     'handlers': {
         'file': {
-            'level': 'INFO',
+            'level': 'DEBUG',
             'class': 'logging.FileHandler',
             'filename': os.path.join(BASE_DIR, 'logs', 'django.log'),
-            'formatter': 'verbose',
+            'formatter': 'detailed',
         },
         'console': {
             'level': 'DEBUG',
             'class': 'logging.StreamHandler',
-            'formatter': 'simple',
+            'formatter': 'detailed',
         },
     },
     'root': {
         'handlers': ['console', 'file'],
-        'level': 'INFO',
+        'level': 'DEBUG',
     },
     'loggers': {
         'django': {
             'handlers': ['console', 'file'],
-            'level': 'INFO',
+            'level': 'DEBUG',
             'propagate': False,
         },
         'dhl_api': {
             'handlers': ['console', 'file'],
+            'level': 'DEBUG',
+            'propagate': False,
+        },
+        'urllib3': {
+            'handlers': ['console'],
+            'level': 'DEBUG',
+            'propagate': False,
+        },
+        'requests': {
+            'handlers': ['console'],
             'level': 'DEBUG',
             'propagate': False,
         },
