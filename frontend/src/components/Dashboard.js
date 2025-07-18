@@ -5,6 +5,32 @@ import AccountDropdown from './AccountDropdown';
 
 const Dashboard = ({ selectedAccount, setSelectedAccount }) => {
   const { isAuthenticated, user } = useAuth();
+
+  // Validación de autenticación al inicio
+  if (!isAuthenticated) {
+    return (
+      <div className="max-w-4xl mx-auto">
+        <div className="bg-yellow-50 border border-yellow-200 rounded-md p-4">
+          <div className="flex">
+            <div className="flex-shrink-0">
+              <svg className="h-5 w-5 text-yellow-400" fill="currentColor" viewBox="0 0 20 20">
+                <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+            </svg>
+            </div>
+            <div className="ml-3">
+              <h3 className="text-sm font-medium text-yellow-800">
+                No autenticado
+              </h3>
+              <div className="mt-2 text-sm text-yellow-700">
+                <p>Debes iniciar sesión para acceder a los servicios de DHL.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   const [activeTab, setActiveTab] = useState('rate');
   const [shipmentId, setShipmentId] = useState('2287013540');
   const [trackingNumber, setTrackingNumber] = useState('5339266472');
@@ -47,9 +73,8 @@ const Dashboard = ({ selectedAccount, setSelectedAccount }) => {
       currency: 'USD'
     },
     service: 'P', // P = DHL Express Worldwide
-    payment: 'S' // S = Shipper pays
+    payment: 'S', // S = Shipper pays
   });
-
   // Estados para cotización de tarifas
   const [rateData, setRateData] = useState({
     origin: {
@@ -68,7 +93,10 @@ const Dashboard = ({ selectedAccount, setSelectedAccount }) => {
       length: 1,
       width: 1,
       height: 1
-    }
+    },
+    declared_weight: null, // Nuevo campo para peso declarado
+    service: 'P', // P = NON_DOCUMENTS, D = DOCUMENTS
+    account_number: selectedAccount || '', // Cuenta DHL para cotización
   });
 
   // Configurar axios para incluir el token en todas las requests
@@ -189,20 +217,30 @@ const Dashboard = ({ selectedAccount, setSelectedAccount }) => {
       }
     }));
   };
-
   const handleTrackingRequest = async () => {
     setLoading(true);
     setError('');
     setResult(null);
 
     try {
-      const response = await axios.post('/api/dhl/tracking/', {
+      console.log('Enviando solicitud de tracking para:', trackingNumber);
+      console.log('Headers:', getAuthHeaders());
+      
+      const response = await axios.post('/api/dhl/tracking/?use_simulator=true', {
         tracking_number: trackingNumber
       }, { headers: getAuthHeaders() });
       
+      console.log('Respuesta del tracking:', response.data);
       setResult(response.data);
+      
     } catch (err) {
-      setError(err.response?.data?.message || 'Error al obtener seguimiento');
+      console.error('Error en tracking:', err);
+      console.error('Error response:', err.response?.data);
+      
+      const errorMessage = err.response?.data?.message || 
+                          err.response?.data?.error || 
+                          'Error al obtener seguimiento';
+      setError(errorMessage);
     } finally {
       setLoading(false);
     }
@@ -261,7 +299,12 @@ const Dashboard = ({ selectedAccount, setSelectedAccount }) => {
     }
   };
 
-
+  // Sincronizar rateData.account_number si cambia selectedAccount
+  useEffect(() => {
+    if (selectedAccount) {
+      setRateData(prev => ({ ...prev, account_number: selectedAccount }));
+    }
+  }, [selectedAccount]);
 
   const renderTabContent = () => {
     switch (activeTab) {
@@ -269,12 +312,6 @@ const Dashboard = ({ selectedAccount, setSelectedAccount }) => {
         return (
           <div className="space-y-4">
             <div className="bg-blue-50 p-4 rounded-md">
-              <h3 className="font-medium text-blue-900 mb-2">Comprobante de Entrega Electrónico (ePOD)</h3>
-              <p className="text-blue-700 text-sm">
-                Obtén el comprobante de entrega electrónico de DHL con la información de la entrega.
-              </p>
-            </div>
-            
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
                 ID de Envío
@@ -438,15 +475,13 @@ const Dashboard = ({ selectedAccount, setSelectedAccount }) => {
                   />
                 </div>
               </div>
-            </div>
-
-            {/* Peso y Dimensiones */}
+            </div>            {/* Peso y Dimensiones */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div className="space-y-4">
                 <h4 className="font-medium text-gray-900 border-b pb-2">Peso</h4>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Peso (kg)
+                    Peso Real (kg)
                   </label>
                   <input
                     type="number"
@@ -456,6 +491,22 @@ const Dashboard = ({ selectedAccount, setSelectedAccount }) => {
                     className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-dhl-red focus:border-transparent"
                     placeholder="25"
                   />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Peso Declarado (kg) - Opcional
+                  </label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    value={rateData.declared_weight || ''}
+                    onChange={(e) => updateRateData('declared_weight', e.target.value ? parseFloat(e.target.value) : null)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-dhl-red focus:border-transparent"
+                    placeholder="Peso declarado para facturación"
+                  />
+                  <p className="text-xs text-gray-500 mt-1">
+                    Si no se especifica, se calculará automáticamente el peso facturable basado en el peso real y dimensional
+                  </p>
                 </div>
               </div>
 
@@ -504,6 +555,20 @@ const Dashboard = ({ selectedAccount, setSelectedAccount }) => {
                 </div>
               </div>
             </div>
+            {/* Opciones de Contenido */}
+            <div className="mt-4">
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Tipo de Contenido
+              </label>
+              <select
+                value={rateData.service}
+                onChange={(e) => updateRateData('service', e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-dhl-red focus:border-transparent"
+              >
+                <option value="P">No Documentos (NON_DOCUMENTS)</option>
+                <option value="D">Documentos (DOCUMENTS)</option>
+              </select>
+            </div>
 
             <button
               onClick={handleRateRequest}
@@ -514,7 +579,7 @@ const Dashboard = ({ selectedAccount, setSelectedAccount }) => {
             </button>
 
             {/* Resultados de Cotización */}
-            {result && result.success && result.rates && (
+            {result && result.success && result.rates && Array.isArray(result.rates) && result.rates.length > 0 && (
               <div className="mt-8">
                 <h4 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
                   <span className="mr-2">💰</span>
@@ -536,10 +601,14 @@ const Dashboard = ({ selectedAccount, setSelectedAccount }) => {
                           <span className="font-medium">Entrega:</span> {rate.delivery_time}
                         </div>
                         <div className="text-gray-700 mb-2">
-                          <span className="font-medium">Peso:</span> {rate.weight} kg
+                          <span className="font-medium">Peso:</span> {rate.weight || 'N/A'} kg
                         </div>
                         <div className="text-gray-700 mb-2">
-                          <span className="font-medium">Dimensiones:</span> {rate.dimensions.length}×{rate.dimensions.width}×{rate.dimensions.height} cm
+                          <span className="font-medium">Dimensiones:</span> {
+                            rate.dimensions ? 
+                            `${rate.dimensions.length}×${rate.dimensions.width}×${rate.dimensions.height} cm` : 
+                            'N/A'
+                          }
                         </div>
                       </div>
                       <button
@@ -586,9 +655,7 @@ const Dashboard = ({ selectedAccount, setSelectedAccount }) => {
               >
                 {loading ? 'Obteniendo seguimiento...' : 'Obtener Seguimiento'}
               </button>
-            </div>
-
-            {/* Resultados de Tracking */}
+            </div>            {/* Resultados de Tracking */}
             {result && result.success && result.tracking_info && (
               <div className="mt-8">
                 <h4 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
@@ -648,15 +715,47 @@ const Dashboard = ({ selectedAccount, setSelectedAccount }) => {
                       </div>
                     </div>
                   )}
-                </div>
-
-                {/* Detalles de piezas individuales */}
-                {result.piece_details && result.piece_details.length > 0 && (
+                </div>                {/* Detalles de piezas individuales */}
+                {result.piece_details && Array.isArray(result.piece_details) && result.piece_details.length > 0 && (
                   <div className="bg-white rounded-lg shadow-md border p-6 mb-6">
-                    <h5 className="font-semibold text-gray-900 mb-4 flex items-center">
-                      <span className="mr-2">📦</span>
-                      Detalles de Piezas
-                    </h5>
+                    <div className="flex justify-between items-center mb-4">
+                      <h5 className="font-semibold text-gray-900 flex items-center">
+                        <span className="mr-2">📦</span>
+                        Detalles de Piezas
+                      </h5>
+                      <button
+                        onClick={() => {
+                          // Llenar datos de cotización con información del tracking
+                          const firstPiece = result.piece_details[0];
+                          if (firstPiece) {
+                            setRateData(prev => ({
+                              ...prev,
+                              origin: {
+                                ...prev.origin,
+                                city: result.tracking_info.origin?.split(',')[0] || prev.origin.city,
+                              },
+                              destination: {
+                                ...prev.destination,
+                                city: result.tracking_info.destination?.split(',')[0] || prev.destination.city,
+                              },
+                              weight: parseFloat(firstPiece.actual_weight) || prev.weight,
+                              dimensions: {
+                                length: parseFloat(firstPiece.actual_length) / 100 || prev.dimensions.length, // Convertir cm a m
+                                width: parseFloat(firstPiece.actual_width) / 100 || prev.dimensions.width,
+                                height: parseFloat(firstPiece.actual_height) / 100 || prev.dimensions.height
+                              }
+                            }));
+                          }
+                          setActiveTab('rate');
+                        }}
+                        className="px-4 py-2 bg-gradient-to-r from-yellow-500 to-orange-500 text-white rounded-md hover:from-yellow-600 hover:to-orange-600 focus:outline-none focus:ring-2 focus:ring-yellow-500 focus:ring-offset-2 transition-all duration-200 flex items-center font-medium shadow-md"
+                      >
+                        <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1" />
+                        </svg>
+                        Cotizar este envío
+                      </button>
+                    </div>
                     <div className="space-y-4">
                       {result.piece_details.map((piece, pieceIndex) => (
                         <div key={pieceIndex} className="border rounded-lg p-4">
@@ -1190,31 +1289,6 @@ const Dashboard = ({ selectedAccount, setSelectedAccount }) => {
     }
   };
 
-  // Si no está autenticado, mostrar mensaje
-  if (!isAuthenticated) {
-    return (
-      <div className="max-w-4xl mx-auto">
-        <div className="bg-yellow-50 border border-yellow-200 rounded-md p-4">
-          <div className="flex">
-            <div className="flex-shrink-0">
-              <svg className="h-5 w-5 text-yellow-400" fill="currentColor" viewBox="0 0 20 20">
-                <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
-              </svg>
-            </div>
-            <div className="ml-3">
-              <h3 className="text-sm font-medium text-yellow-800">
-                No autenticado
-              </h3>
-              <div className="mt-2 text-sm text-yellow-700">
-                <p>Debes iniciar sesión para acceder a los servicios de DHL.</p>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="max-w-4xl mx-auto">
       <div className="mb-8">
@@ -1263,12 +1337,11 @@ const Dashboard = ({ selectedAccount, setSelectedAccount }) => {
 
         {/* Error Display */}
         {error && (
-          <div className="mt-6 p-4 bg-red-50 border border-red-200 rounded-md">
-            <div className="flex">
+          <div className="mt-6 bg-red-50 border border-red-200 rounded-lg p-4">
+            <div className="flex items-center">
               <div className="flex-shrink-0">
-                <svg className="h-5 w-5 text-red-400" fill="currentColor" viewBox="0 0 20 20">
-                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-                </svg>
+                <svg className="h-5 w-5 text-red-400" viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm8-8a8 8 0 11-16 0 8 8 0 0116 0zM10 10h4a1 1 0 110 2h-4a1 1 0 110-2zm0-4h4a1 1 0 110 2h-4a1 1 0 110-2z" clipRule="evenodd" />
               </div>
               <div className="ml-3">
                 <h3 className="text-sm font-medium text-red-800">
@@ -1314,7 +1387,7 @@ const Dashboard = ({ selectedAccount, setSelectedAccount }) => {
                     <div className="bg-white rounded-lg p-4 shadow-sm border">
                       <div className="flex items-center mb-3">
                         <svg className="w-5 h-5 text-blue-600 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0116 0z" />
                         </svg>
                         <h4 className="font-semibold text-gray-900">Tiempo de Entrega</h4>
                       </div>
@@ -1393,7 +1466,7 @@ const Dashboard = ({ selectedAccount, setSelectedAccount }) => {
                   <div className="mt-6 bg-white rounded-lg p-4 shadow-sm border">
                     <h4 className="font-semibold text-gray-900 mb-3 flex items-center">
                       <svg className="w-5 h-5 text-purple-600 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
                       </svg>
                       Detalles del Paquete
                     </h4>

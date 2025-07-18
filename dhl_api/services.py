@@ -4,6 +4,8 @@ import base64
 from datetime import datetime, timedelta
 import os
 import logging
+import pytz
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -17,63 +19,13 @@ class DHLService:
         logger.info(f"Initializing DHLService with environment: {environment}")
         logger.info(f"Base URL: {base_url}")
         
-        # Configuración por entorno
-        if environment == "sandbox":
-            # Para sandbox, usar endpoints de prueba específicos
-            self.endpoints = {
-                "getePOD": "https://wsbexpress.dhl.com:443/gbl/getePOD",
-                "rate": "https://wsbexpress.dhl.com:443/sndpt/expressRateBook",
-                "tracking": "https://wsbexpress.dhl.com:443/gbl/glDHLExpressTrack",
-                "shipment": "https://wsbexpress.dhl.com:443/sndpt/expressRateBook"
-            }
-            # Datos de prueba específicos del sandbox
-            self.sandbox_data = {
-                "account_number": "123456789",
-                "test_tracking": "1234567890",
-                "test_shipment_id": "2287013540",
-                "test_origin": {
-                    "postal_code": "12345",
-                    "city": "Test City",
-                    "country_code": "US"
-                },
-                "test_destination": {
-                    "postal_code": "54321", 
-                    "city": "Destination City",
-                    "country_code": "US"
-                },
-                "test_weight": 1.5,
-                "test_dimensions": {
-                    "length": 10,
-                    "width": 10,
-                    "height": 10
-                }
-            }
-        elif environment == "development":
-            # Configuración para desarrollo local
-            self.endpoints = {
-                "getePOD": f"{base_url}/gbl/getePOD",
-                "rate": f"{base_url}/sndpt/expressRateBook",
-                "tracking": f"{base_url}/gbl/glDHLExpressTrack",
-                "shipment": f"{base_url}/sndpt/expressRateBook"
-            }
-            self.sandbox_data = {
-                "account_number": "706014493",
-                "test_tracking": "5339266472",
-                "test_shipment_id": "2287013540"
-            }
-        else:
-            # URLs de producción - usar endpoints exactos que funcionan
-            self.endpoints = {
-                "getePOD": "https://wsbexpress.dhl.com:443/gbl/getePOD",
-                "rate": "https://wsbexpress.dhl.com:443/sndpt/expressRateBook",
-                "tracking": "https://wsbexpress.dhl.com:443/gbl/glDHLExpressTrack",
-                "shipment": "https://wsbexpress.dhl.com:443/sndpt/expressRateBook"
-            }
-            self.sandbox_data = {
-                "account_number": "706065602",  # Usar el número real
-                "test_tracking": "TU_TRACKING_NUMBER",
-                "test_shipment_id": "TU_SHIPMENT_ID"
-            }
+        # Configuración de endpoints DHL
+        self.endpoints = {
+            "getePOD": "https://wsbexpress.dhl.com:443/gbl/getePOD",
+            "rate": "https://wsbexpress.dhl.com:443/sndpt/expressRateBook",
+            "tracking": "https://wsbexpress.dhl.com:443/gbl/glDHLExpressTrack",
+            "shipment": "https://wsbexpress.dhl.com:443/sndpt/expressRateBook"
+        }
         
         logger.info(f"Endpoints configured: {self.endpoints}")
 
@@ -154,43 +106,42 @@ class DHLService:
             # Usar exactamente el mismo SOAP request que funciona
             soap_body = f"""
 <SOAP-ENV:Envelope xmlns:SOAP-ENC="http://schemas.xmlsoap.org/soap/encoding/" xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/" xmlns:tns="glDHLExpressePOD/providers/DocumentRetrieve" xmlns:wsse="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd">
-	<SOAP-ENV:Header>
-		<wsse:Security SOAP-ENV:mustUnderstand="1" xmlns:wsse="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd">
-			<wsse:UsernameToken>
-				<wsse:Username>apO3fS5mJ8zT7h</wsse:Username>
-				<wsse:Password>J^4oF@1qW!0qS!5b</wsse:Password>
-			</wsse:UsernameToken>
-		</wsse:Security>
-	</SOAP-ENV:Header>
-	<SOAP-ENV:Body>
-		<tns:shipmentDocumentRetrieveReq>
-			<MSG>
-				<Hdr Dtm="2018-08-06T08:08:41.914+02:00" Id="1533535721914" Ver="1.038">
-					<Sndr AppCd="GloWS" AppNm="GloWS"/>
-				</Hdr>
-				<Bd>
-					<Shp Id="{shipment_id}">
-						<ShpTr>
-							<SCDtl AccNo="706014493" CRlTyCd="PY"/>
-						</ShpTr>
-						<ShpInDoc>
-							<SDoc DocTyCd="POD"/>
-						</ShpInDoc>
-					</Shp>
-					<GenrcRq>
-						<GenrcRqCritr TyCd="IMG_CONTENT" Val="epod-detail"/>
-						<GenrcRqCritr TyCd="IMG_FORMAT" Val="PDF"/>
-						<GenrcRqCritr TyCd="DOC_RND_REQ" Val="true"/>
-						<GenrcRqCritr TyCd="EXT_REQ" Val="true"/>
-						<GenrcRqCritr TyCd="DUPL_HANDL" Val="CORE_WB_NO"/>
-						<GenrcRqCritr TyCd="SORT_BY" Val="$INGEST_DATE,D"/>
-						<GenrcRqCritr TyCd="LANGUAGE" Val="es"/>
-					</GenrcRq>
-				</Bd>
-			</MSG>
-		</tns:shipmentDocumentRetrieveReq>
-	</SOAP-ENV:Body>
-</SOAP-ENV:Envelope>"""
+    <SOAP-ENV:Header>
+        <wsse:Security SOAP-ENV:mustUnderstand="1" xmlns:wsse="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd">
+            <wsse:UsernameToken>
+                <wsse:Username>apO3fS5mJ8zT7h</wsse:Username>
+                <wsse:Password>J^4oF@1qW!0qS!5b</wsse:Password>
+            </wsse:UsernameToken>
+        </wsse:Security>
+    </SOAP-ENV:Header>
+    <SOAP-ENV:Body>
+        <tns:shipmentDocumentRetrieveReq>
+            <MSG>
+                <Hdr Dtm="2018-08-06T08:08:41.914+02:00" Id="1533535721914" Ver="1.038">
+                    <Sndr AppCd="GloWS" AppNm="GloWS"/>
+                </Hdr>
+                <Bd>
+                    <Shp Id="{shipment_id}">
+                        <ShpTr>
+                            <SCDtl AccNo="706014493" CRlTyCd="PY"/>
+                        </ShpTr>
+                        <ShpInDoc>
+                            <SDoc DocTyCd="POD"/>
+                        </ShpInDoc>
+                    </Shp>
+                    <GenrcRq>
+                        <GenrcRqCritr TyCd="IMG_CONTENT" Val="epod-detail"/>
+                        <GenrcRqCritr TyCd="IMG_FORMAT" Val="PDF"/>
+                        <GenrcRqCritr TyCd="DOC_RND_REQ" Val="true"/>
+                        <GenrcRqCritr TyCd="EXT_REQ" Val="true"/>
+                        <GenrcRqCritr TyCd="DUPL_HANDL" Val="CORE_WB_NO"/>
+                        <GenrcRqCritr TyCd="SORT_BY" Val="$INGEST_DATE,D"/>
+                        <GenrcRqCritr TyCd="LANGUAGE" Val="es"/>
+                    </GenrcRq>
+                </Bd>
+            </MSG>
+        </tns:shipmentDocumentRetrieveReq>        </SOAP-ENV:Body>
+        </SOAP-ENV:Envelope>"""
             
             response = requests.post(
                 self.endpoints["getePOD"],
@@ -198,143 +149,207 @@ class DHLService:
                 data=soap_body
             )
             
-            return self._parse_response(response, "ePOD")
+            return self._parse_response(response, response.text, "ePOD")
             
         except Exception as e:
             return {"success": False, "message": f"Error en get_ePOD: {str(e)}"}
 
-    def get_rate(self, origin, destination, weight, dimensions):
-        """Obtiene cotización de tarifas"""
+    def _calculate_dimensional_weight(self, dimensions):
+        """
+        Calcula el peso dimensional según la fórmula de DHL
+        Peso dimensional = (Largo × Ancho × Alto) / 5000
+        """
         try:
-            # Para desarrollo/sandbox, simular la cotización de tarifas
-            if self.environment in ["sandbox", "development"]:
-                # Generar tarifas simuladas basadas en el peso y distancia
-                import random
-                
-                # Calcular distancia aproximada (simplificado)
-                origin_country = origin.get('country', 'US')
-                dest_country = destination.get('country', 'US')
-                
-                # Tarifas base por servicio
-                services = {
-                    'P': {'name': 'Priority', 'base_rate': 45.00, 'multiplier': 2.5},
-                    'K': {'name': 'Economy', 'base_rate': 35.00, 'multiplier': 2.0},
-                    'U': {'name': 'Express', 'base_rate': 55.00, 'multiplier': 3.0},
-                    'Y': {'name': 'Same Day', 'base_rate': 85.00, 'multiplier': 4.0}
-                }
-                
-                # Calcular tarifa basada en peso y distancia
-                weight_factor = weight * 2.5
-                distance_factor = 1.0
-                
-                if origin_country != dest_country:
-                    distance_factor = 3.0  # Internacional
-                elif origin.get('state') != destination.get('state'):
-                    distance_factor = 1.5  # Nacional entre estados
-                
-                rates = []
-                for service_code, service_info in services.items():
-                    total_rate = service_info['base_rate'] + (weight_factor * service_info['multiplier'] * distance_factor)
-                    # Agregar variación aleatoria
-                    total_rate += random.uniform(-5, 5)
-                    total_rate = round(total_rate, 2)
-                    
-                    # Calcular tiempo de entrega estimado
-                    if service_code == 'P':
-                        delivery_time = "1-2 días hábiles"
-                    elif service_code == 'K':
-                        delivery_time = "3-5 días hábiles"
-                    elif service_code == 'U':
-                        delivery_time = "1 día hábil"
-                    else:
-                        delivery_time = "Mismo día"
-                    
-                    rates.append({
-                        'service_code': service_code,
-                        'service_name': service_info['name'],
-                        'total_charge': total_rate,
-                        'currency': 'USD',
-                        'delivery_time': delivery_time,
-                        'weight': weight,
-                        'dimensions': dimensions
-                    })
-                
-                return {
-                    "success": True,
-                    "rates": rates,
-                    "origin": origin,
-                    "destination": destination,
-                    "message": "Cotización generada exitosamente (modo sandbox)"
-                }
+            length = float(dimensions.get('length', 0))
+            width = float(dimensions.get('width', 0))
+            height = float(dimensions.get('height', 0))
             
-            # Para producción, usar el endpoint real
-            soap_action = "euExpressRateBook_providerServices_ShipmentHandlingServices_Binder_getRateRequest"
+            if length <= 0 or width <= 0 or height <= 0:
+                return 0.0
             
-            soap_body = f"""
-            <soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:rat="http://scxgxtt.phx-dc.dhl.com/euExpressRateBook/RateMsgRequest">
-                <soapenv:Header>
-                    {self._get_auth_header(endpoint_type="rate")}
-                </soapenv:Header>
-                <soapenv:Body>
-                    <rat:RateRequest>
-                        <ClientDetail>
-                            <sso>testsso</sso>
-                            <plant>testplant</plant>
-                        </ClientDetail>
-                        <RequestedShipment>
-                            <DropOffType>REGULAR_PICKUP</DropOffType>
-                            <NextBusinessDay>N</NextBusinessDay>
-                            <Ship>
-                                <Shipper>
-                                    <StreetLines>{origin.get('address', 'Test Address')}</StreetLines>
-                                    <City>{origin.get('city', 'Test City')}</City>
-                                    <StateOrProvinceCode>{origin.get('state', 'XX')}</StateOrProvinceCode>
-                                    <PostalCode>{origin.get('postal_code', '00000')}</PostalCode>
-                                    <CountryCode>{origin.get('country', 'US')}</CountryCode>
-                                </Shipper>
-                                <Recipient>
-                                    <StreetLines>{destination.get('address', 'Test Address')}</StreetLines>
-                                    <City>{destination.get('city', 'Test City')}</City>
-                                    <PostalCode>{destination.get('postal_code', '00000')}</PostalCode>
-                                    <CountryCode>{destination.get('country', 'US')}</CountryCode>
-                                </Recipient>
-                            </Ship>
-                            <Packages>
-                                <RequestedPackages number="1">
-                                    <Weight>
-                                        <Value>{weight}</Value>
-                                    </Weight>
-                                    <Dimensions>
-                                        <Length>{dimensions.get('length', 10)}</Length>
-                                        <Width>{dimensions.get('width', 10)}</Width>
-                                        <Height>{dimensions.get('height', 10)}</Height>
-                                    </Dimensions>
-                                </RequestedPackages>
-                            </Packages>
-                            <ShipTimestamp>{datetime.now().strftime('%Y-%m-%dT%H:%M:%SGMT+00:00')}</ShipTimestamp>
-                            <UnitOfMeasurement>SU</UnitOfMeasurement>
-                            <Content>NON_DOCUMENTS</Content>
-                            <PaymentInfo>DDU</PaymentInfo>
-                            <Account>803921577</Account>
-                        </RequestedShipment>
-                    </rat:RateRequest>
-                </soapenv:Body>
-            </soapenv:Envelope>
-            """
+            # Fórmula DHL: (L × W × H) / 5000
+            dimensional_weight = (length * width * height) / 5000
+            
+            logger.debug(f"Calculated dimensional weight: {dimensional_weight:.2f} kg (L:{length} × W:{width} × H:{height})")
+            return round(dimensional_weight, 2)
+            
+        except (ValueError, TypeError) as e:
+            logger.error(f"Error calculating dimensional weight: {str(e)}")
+            return 0.0
+    
+    def _calculate_chargeable_weight(self, actual_weight, dimensions, declared_weight=None):
+        """
+        Calcula el peso facturable (el más alto entre peso real, dimensional y declarado)
+        Este es el peso que DHL usa para calcular la tarifa
+        """
+        try:
+            actual_weight = float(actual_weight) if actual_weight else 0.0
+            declared_weight = float(declared_weight) if declared_weight else 0.0
+            
+            # Calcular peso dimensional
+            dimensional_weight = self._calculate_dimensional_weight(dimensions)
+            
+            # Encontrar el peso más alto
+            chargeable_weight = max(actual_weight, dimensional_weight, declared_weight)
+            
+            # Log detallado para debugging
+            logger.info(f"Weight calculation details:")
+            logger.info(f"  - Actual weight: {actual_weight:.2f} kg")
+            logger.info(f"  - Dimensional weight: {dimensional_weight:.2f} kg")
+            logger.info(f"  - Declared weight: {declared_weight:.2f} kg")
+            logger.info(f"  - Chargeable weight (highest): {chargeable_weight:.2f} kg")
+            
+            return round(chargeable_weight, 2)
+            
+        except (ValueError, TypeError) as e:
+            logger.error(f"Error calculating chargeable weight: {str(e)}")
+            return float(actual_weight) if actual_weight else 0.0
+
+    def get_rate(self, origin, destination, weight, dimensions, declared_weight=None, content_type="P", account_number=None):
+        """
+        Obtiene cotización de tarifas usando el formato exacto que funciona con DHL
+        
+        Args:
+            origin: Información del origen
+            destination: Información del destino
+            weight: Peso del paquete
+            dimensions: Dimensiones del paquete
+            declared_weight: Peso declarado (opcional)
+            content_type: Tipo de contenido - "P" para NON_DOCUMENTS, "D" para DOCUMENTS
+        """
+        try:
+            # Validar tipo de contenido
+            if content_type not in ["P", "D"]:
+                content_type = "P"  # Default a NON_DOCUMENTS
+            
+            # Mapear tipo de contenido a XML
+            # P = NON_DOCUMENTS (paquetes con productos)
+            # D = DOCUMENTS (solo documentos)
+            content_xml = "NON_DOCUMENTS" if content_type == "P" else "DOCUMENTS"
+            
+            logger.info(f"Using content type: {content_type} ({content_xml})")
+            
+            # Calcular peso facturable
+            chargeable_weight = self._calculate_chargeable_weight(
+                actual_weight=weight,
+                dimensions=dimensions,
+                declared_weight=declared_weight
+            )
+            
+            # Usar el peso facturable para las cotizaciones
+            weight_to_use = chargeable_weight
+            
+            # Determinar número de cuenta para la cotización
+            account_to_use = account_number if account_number else '706014493'
+            logger.info(f"Using account number for rate: {account_to_use}")
+            # Payload SOAP exacto con account_number y SCDtl dinámicos
+            soap_body = f"""<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:rat="http://scxgxtt.phx-dc.dhl.com/euExpressRateBook/RateMsgRequest">
+    <soapenv:Header>
+        {self._get_auth_header()}
+    </soapenv:Header>
+    <soapenv:Body>
+        <rat:RateRequest>
+            <ClientDetail>
+                <SCDtl AccNo="{account_number or os.getenv('DHL_ACCOUNT_NUMBER', '706014493')}" CRlTyCd="{content_xml}"/>
+            </ClientDetail>
+            <RequestedShipment>
+                <DropOffType>REQUEST_COURIER</DropOffType>
+                <NextBusinessDay>N</NextBusinessDay>
+                <Ship>
+                    <Shipper>
+                        <StreetLines>{self._clean_text(origin.get('address', 'River House'))}</StreetLines>
+                        <StreetLines2>{self._clean_text(origin.get('address2', '1'))}</StreetLines2>
+                        <StreetLines3>{self._clean_text(origin.get('address3', '1'))}</StreetLines3>
+                        <StreetName>{self._clean_text(origin.get('street', 'Eas Wall road'))}</StreetName>
+                        <StreetNumber>{self._clean_text(origin.get('street_number', '1'))}</StreetNumber>
+                        <City>{self._clean_text(origin.get('city', 'Panama'))}</City>
+                        <StateOrProvinceCode>{origin.get('state', 'PA')}</StateOrProvinceCode>
+                        <PostalCode>{origin.get('postal_code', '0')}</PostalCode>
+                        <CountryCode>{origin.get('country', 'PA')}</CountryCode>
+                    </Shipper>
+                    <Recipient>
+                        <StreetLines>{self._clean_text(destination.get('address', 'River House'))}</StreetLines>
+                        <StreetLines2>{self._clean_text(destination.get('address2', '1'))}</StreetLines2>
+                        <StreetLines3>{self._clean_text(destination.get('address3', '1'))}</StreetLines3>
+                        <StreetName>{self._clean_text(destination.get('street', 'Eas Wall road'))}</StreetName>
+                        <StreetNumber>{self._clean_text(destination.get('street_number', '1'))}</StreetNumber>
+                        <City>{self._clean_text(destination.get('city', 'MIA'))}</City>
+                        <PostalCode>{destination.get('postal_code', '25134')}</PostalCode>
+                        <CountryCode>{destination.get('country', 'US')}</CountryCode>
+                    </Recipient>
+                </Ship>
+                <Packages>
+                    <RequestedPackages number="1">
+                        <Weight>
+                            <Value>{weight_to_use}</Value>
+                        </Weight>
+                        <Dimensions>
+                            <Length>{dimensions.get('length', 1)}</Length>
+                            <Width>{dimensions.get('width', 1)}</Width>
+                            <Height>{dimensions.get('height', 1)}</Height>
+                        </Dimensions>
+                    </RequestedPackages>
+                </Packages>
+                <UnitOfMeasurement>SI</UnitOfMeasurement>
+                <Content>{content_xml}</Content>
+                <PaymentInfo>DDU</PaymentInfo>
+                <Account>{account_number or os.getenv('DHL_ACCOUNT_NUMBER', '706014493')}</Account>
+            </RequestedShipment>
+        </rat:RateRequest>
+    </soapenv:Body>
+</soapenv:Envelope>"""
+            
+            # Headers específicos para rate request (incluye Authorization)
+            headers = self._get_headers('euExpressRateBook_providerServices_ShipmentHandlingServices_Binder_getRateRequest')
+            # Asegurar charset en Content-Type
+            headers['Content-Type'] = 'text/xml; charset=utf-8'
+            
+            logger.info(f"Making rate request to: {self.endpoints['rate']}")
+            logger.debug(f"Request body: {soap_body}")
             
             response = requests.post(
                 self.endpoints["rate"],
-                headers=self._get_headers(soap_action),
-                data=soap_body
+                headers=headers,
+                data=soap_body,
+                verify=False,
+                timeout=30
             )
             
-            return self._parse_response(response, "Rate")
+            logger.info(f"Rate response status: {response.status_code}")
+            logger.debug(f"Rate response: {response.text}")
+            
+            result = self._parse_response(response, response.text, "Rate")
+            
+            # Agregar información del peso facturable a la respuesta
+            if result.get('success') and 'rates' in result:
+                weight_breakdown = {
+                    'actual_weight': weight,
+                    'dimensional_weight': self._calculate_dimensional_weight(dimensions),
+                    'declared_weight': declared_weight or 0.0,
+                    'chargeable_weight': chargeable_weight
+                }
+                
+                content_info = {
+                    'content_type': content_type,
+                    'content_xml': content_xml,
+                    'description': 'Paquetes con productos' if content_type == 'P' else 'Solo documentos'
+                }
+                
+                for rate in result['rates']:
+                    rate['weight_breakdown'] = weight_breakdown
+                    rate['content_info'] = content_info
+                
+                result['weight_breakdown'] = weight_breakdown
+                result['content_info'] = content_info
+            
+            return result
             
         except Exception as e:
+            logger.exception(f"Error in get_rate: {str(e)}")
             return {"success": False, "message": f"Error en get_rate: {str(e)}"}
-
+    
     def get_tracking(self, tracking_number):
-        """Obtiene información de seguimiento con validación mejorada"""
+        """Obtiene información de seguimiento usando el formato exacto de DHL"""
         try:
             logger.info(f"Starting tracking request for {tracking_number}")
             logger.info(f"Environment: {self.environment}")
@@ -348,18 +363,13 @@ class DHLService:
             # Limpiar el número de tracking
             tracking_number = str(tracking_number).strip()
             
-            # Validar que sea numérico y tenga al menos 9 dígitos
-            if not tracking_number.isdigit() or len(tracking_number) < 9:
-                logger.error(f"Invalid tracking number format: {tracking_number}")
-                return {"success": False, "message": "Número de tracking inválido. Debe contener al menos 9 dígitos numéricos"}
-            
-            # Usar el formato exacto del ejemplo que funciona
+            # Usar el formato exacto del ejemplo que funciona con credenciales correctas
             soap_body = f"""<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:trac="http://scxgxtt.phx-dc.dhl.com/glDHLExpressTrack/providers/services/trackShipment" xmlns:dhl="http://www.dhl.com">
     <soapenv:Header>
         <wsse:Security soapenv:mustUnderstand="1" xmlns:wsse="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd">
             <wsse:UsernameToken>
-                <wsse:Username>{self.username}</wsse:Username>
-                <wsse:Password>{self.password}</wsse:Password>
+                <wsse:Username>apO3fS5mJ8zT7h</wsse:Username>
+                <wsse:Password>J^4oF@1qW!0qS!5b</wsse:Password>
             </wsse:UsernameToken>
         </wsse:Security>
     </soapenv:Header>
@@ -369,7 +379,7 @@ class DHLService:
                 <dhl:TrackingRequest>
                     <Request>
                         <ServiceHeader>
-                            <MessageTime>2014-07-01T13:39:57.938Z</MessageTime>
+                            <MessageTime>{datetime.now().strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3]}Z</MessageTime>
                             <MessageReference>123456789123456789123456789123</MessageReference>
                         </ServiceHeader>
                     </Request>
@@ -384,75 +394,110 @@ class DHLService:
     </soapenv:Body>
 </soapenv:Envelope>"""
             
-            # Obtener headers
-            headers = self._get_headers("")
+            # Headers específicos para tracking
+            headers = {
+                'Content-Type': 'text/xml; charset=utf-8',
+                'SOAPAction': 'glDHLExpressTrack_providers_services_trackShipment_Binder_trackShipmentRequest'
+            }
+            
             logger.debug(f"Request Headers: {headers}")
             logger.debug(f"Request Body: {soap_body}")
             
-            # Hacer la petición a DHL
-            logger.info("Making request to DHL API...")
-            response = requests.post(
-                self.endpoints["tracking"],
-                headers=headers,
-                data=soap_body,
-                verify=False
-            )
+            # Hacer la petición a DHL usando la URL exacta
+            endpoint_url = "https://wsbexpress.dhl.com:443/gbl/glDHLExpressTrack"
+            logger.info(f"Making request to: {endpoint_url}")
             
-            # Log de la respuesta para debugging
-            logger.info(f"Response Status: {response.status_code}")
-            logger.debug(f"Response Headers: {dict(response.headers)}")
-            logger.debug(f"Response Content Length: {len(response.text)}")
-            logger.debug(f"Response Content: {response.text}")
-            
-            # Verificar si la respuesta es válida
-            if response.status_code != 200:
-                logger.error(f"HTTP Error: {response.status_code}")
-                return self._handle_http_error(response)
-            
-            # Parsear la respuesta
             try:
-                root = ET.fromstring(response.content)
-                logger.info(f"XML Root Tag: {root.tag}")
-                result = self._parse_tracking_response(root, response.text)
-                logger.info(f"Parse Result: {result}")
-                return result
-            except ET.ParseError as e:
-                logger.error(f"XML Parse Error: {str(e)}")
+                response = requests.post(
+                    endpoint_url,
+                    headers=headers,
+                    data=soap_body,
+                    verify=False,
+                    timeout=30
+                )
+                
+                # Log de la respuesta para debugging
+                logger.info(f"Response Status: {response.status_code}")
+                logger.debug(f"Response Headers: {dict(response.headers)}")
+                logger.debug(f"Response Content Length: {len(response.text)}")
+                logger.debug(f"Response Content: {response.text}")
+                
+                # Verificar si la respuesta es válida
+                if response.status_code != 200:
+                    logger.error(f"HTTP Error: {response.status_code}")
+                    return self._handle_http_error(response)
+                  
+                # Parsear la respuesta
+                try:
+                    root = ET.fromstring(response.content)
+                    logger.info(f"XML Root Tag: {root.tag}")
+                    result = self._parse_tracking_response(root, response.text)
+                    logger.info(f"Parse Result: {result}")
+                    return result
+                except ET.ParseError as e:
+                    logger.error(f"XML Parse Error: {str(e)}")
+                    return {
+                        "success": False,
+                        "message": f"Error parseando XML de DHL: {str(e)}",
+                        "error_code": "XML_PARSE_ERROR",
+                        "raw_response": response.text[:500]
+                    }
+                    
+            except requests.exceptions.Timeout:
+                logger.error(f"Timeout error for tracking {tracking_number}")
                 return {
                     "success": False,
-                    "message": f"Error parseando XML de DHL: {str(e)}",
-                    "raw_response": response.text[:500]
+                    "message": "Timeout al conectar con DHL. Intenta más tarde.",
+                    "error_code": "TIMEOUT_ERROR",
+                    "suggestion": "Reintentar en unos minutos"
+                }
+            except requests.exceptions.ConnectionError:
+                logger.error(f"Connection error for tracking {tracking_number}")
+                return {
+                    "success": False,
+                    "message": "Error de conexión con DHL. Verifica tu conexión a internet.",
+                    "error_code": "CONNECTION_ERROR",
+                    "suggestion": "Verificar conexión a internet y reintentar"
+                }
+            except requests.exceptions.RequestException as e:
+                logger.error(f"Request error for tracking {tracking_number}: {str(e)}")
+                return {
+                    "success": False,
+                    "message": f"Error en la petición a DHL: {str(e)}",
+                    "error_code": "REQUEST_ERROR",
+                    "suggestion": "Reintentar más tarde"
                 }
             
         except Exception as e:
             logger.exception(f"Error in get_tracking for {tracking_number}")
-            return {"success": False, "message": f"Error en get_tracking: {str(e)}"}
+            return {
+                "success": False, 
+                "message": f"Error en get_tracking: {str(e)}",
+                "error_code": "GENERAL_ERROR",
+                "suggestion": "Contactar soporte técnico"
+            }
 
-    def create_shipment(self, shipment_data):
-        """Crea un nuevo envío usando el formato exacto que funciona"""
+    def create_shipment(self, shipment_data, content_type="P"):
+        """
+        Crea un nuevo envío usando el formato exacto que funciona
+        
+        Args:
+            shipment_data: Datos del envío
+            content_type: Tipo de contenido - "P" para NON_DOCUMENTS, "D" para DOCUMENTS
+        """
         try:
-            # Para desarrollo/sandbox, simular la creación de envío
-            if self.environment in ["sandbox", "development"]:
-                # Generar un número de tracking simulado
-                import random
-                tracking_number = f"{random.randint(1000000000, 9999999999)}"
-                
-                return {
-                    "success": True,
-                    "tracking_number": tracking_number,
-                    "message": "Envío creado exitosamente (modo sandbox)",
-                    "shipment_data": {
-                        "shipper": shipment_data.get('shipper', {}),
-                        "recipient": shipment_data.get('recipient', {}),
-                        "package": shipment_data.get('package', {}),
-                        "service": shipment_data.get('service', 'P'),
-                        "payment": shipment_data.get('payment', 'S')
-                    },
-                    "estimated_delivery": "3-5 días hábiles",
-                    "cost": "Calculado según tarifas DHL"
-                }
+            # Validar tipo de contenido
+            if content_type not in ["P", "D"]:
+                content_type = "P"  # Default a NON_DOCUMENTS
             
-            # Para producción, usar el endpoint real con formato exacto del ejemplo
+            # Mapear tipo de contenido a XML
+            # P = NON_DOCUMENTS (paquetes con productos)
+            # D = DOCUMENTS (solo documentos)
+            content_xml = "NON_DOCUMENTS" if content_type == "P" else "DOCUMENTS"
+            
+            logger.info(f"Creating shipment with content type: {content_type} ({content_xml})")
+            
+            # Usar el endpoint real con formato exacto del ejemplo
             soap_action = "euExpressRateBook_providerServices_ShipmentHandlingServices_Binder_createShipmentRequest"
             # Extraer datos del formulario
             shipper = shipment_data.get('shipper', {})
@@ -461,7 +506,7 @@ class DHLService:
             packages = shipment_data.get('packages', [])  # Support multiple packages
             service_type = shipment_data.get('service', 'P')
             payment_type = shipment_data.get('payment', 'S')
-            account_number = shipment_data.get('account_number', '706065602')  # Usar la cuenta seleccionada o default
+            account_number = shipment_data.get('account_number', '706065602')  # Usar la cuenta seleccionada o cuenta principal
             # Generar MessageReference único
             message_ref = f"JCAIN{int(datetime.now().timestamp())}"
             # Usar formato exacto del ejemplo que funciona
@@ -511,31 +556,31 @@ class DHLService:
             <ShipTimestamp>{self._get_valid_ship_timestamp()}</ShipTimestamp>
             <PickupLocationCloseTime>18:00</PickupLocationCloseTime>
             <SpecialPickupInstruction>I DECLARE ALL INFORMATION TRUE And CORRECT</SpecialPickupInstruction>
-            <PickupLocation>{self._clean_text(shipper.get('address', 'Test Location'))}</PickupLocation>
+            <PickupLocation>{self._clean_text(shipper.get('address', 'Dirección de Recolección'))}</PickupLocation>
             <PaymentInfo>DDP</PaymentInfo>
             <InternationalDetail>
                <Commodities>
                   <Description>{self._clean_text(package.get('description', 'General Merchandise'))}</Description>
                   <CustomsValue>{package.get('value', 100)}</CustomsValue>
                </Commodities>
-               <Content>NON_DOCUMENTS</Content>
+               <Content>{content_xml}</Content>
             </InternationalDetail>
             <Ship>
                <Shipper>
                   <Contact>
-                     <PersonName>{self._clean_text(shipper.get('name', 'Test Shipper'))}</PersonName>
-                     <CompanyName>{self._clean_text(shipper.get('company', 'Test Company'))}</CompanyName>
+                     <PersonName>{self._clean_text(shipper.get('name', 'Remitente'))}</PersonName>
+                     <CompanyName>{self._clean_text(shipper.get('company', 'Empresa Remitente'))}</CompanyName>
                      <PhoneNumber>{self._clean_phone(shipper.get('phone', '507431-2600'))}</PhoneNumber>
-                     <EmailAddress>{shipper.get('email', 'shipper_test@dhl.com')}</EmailAddress>
+                     <EmailAddress>{shipper.get('email', 'remitente@empresa.com')}</EmailAddress>
                      <MobilePhoneNumber>{self._clean_phone(shipper.get('phone', '507431-2600'))}</MobilePhoneNumber>
                   </Contact>
                   <Address>
-                     <StreetLines>{self._clean_text(shipper.get('address', 'Test Address'))}</StreetLines>
-                     <StreetName>{self._clean_text(shipper.get('address', 'Test Street'))}</StreetName>
+                     <StreetLines>{self._clean_text(shipper.get('address', 'Dirección del Remitente'))}</StreetLines>
+                     <StreetName>{self._clean_text(shipper.get('address', 'Calle del Remitente'))}</StreetName>
                      <StreetNumber>{self._clean_text(shipper.get('address2', 'Building 1'))}</StreetNumber>
                      <StreetLines2>.</StreetLines2>
                      <StreetLines3>{self._clean_text(shipper.get('address3', 'Floor 1'))}</StreetLines3>
-                     <City>{self._clean_text(shipper.get('city', 'Test City'))}</City>
+                     <City>{self._clean_text(shipper.get('city', 'Ciudad del Remitente'))}</City>
                      <StateOrProvinceCode>{self._clean_text(shipper.get('state', 'XX'))}</StateOrProvinceCode>
                      <PostalCode>{shipper.get('postalCode', '0')}</PostalCode>
                      <CountryCode>{shipper.get('country', 'US')}</CountryCode>
@@ -543,17 +588,17 @@ class DHLService:
                </Shipper>
                <Recipient>
                   <Contact>
-                     <PersonName>{self._clean_text(recipient.get('name', 'Test Recipient'))}</PersonName>
-                     <CompanyName>{self._clean_text(recipient.get('company', 'Test Company'))}</CompanyName>
+                     <PersonName>{self._clean_text(recipient.get('name', 'Destinatario'))}</PersonName>
+                     <CompanyName>{self._clean_text(recipient.get('company', 'Empresa Destinatario'))}</CompanyName>
                      <PhoneNumber>{self._clean_phone(recipient.get('phone', '1234567890'))}</PhoneNumber>
-                     <EmailAddress>{recipient.get('email', 'recipient_test@example.com')}</EmailAddress>
+                     <EmailAddress>{recipient.get('email', 'destinatario@empresa.com')}</EmailAddress>
                      <MobilePhoneNumber>{self._clean_phone(recipient.get('phone', '1234567890'))}</MobilePhoneNumber>
                   </Contact>
                   <Address>
-                     <StreetLines>{self._clean_text(recipient.get('address', 'Test Address'))}</StreetLines>
-                     <StreetName>{self._clean_text(recipient.get('address', 'Test Street'))}</StreetName>
+                     <StreetLines>{self._clean_text(recipient.get('address', 'Dirección del Destinatario'))}</StreetLines>
+                     <StreetName>{self._clean_text(recipient.get('address', 'Calle del Destinatario'))}</StreetName>
                      <StreetLines2>{self._clean_text(recipient.get('address2', 'Apt 1'))}</StreetLines2>
-                     <City>{self._clean_text(recipient.get('city', 'Test City'))}</City>
+                     <City>{self._clean_text(recipient.get('city', 'Ciudad del Destinatario'))}</City>
                      <PostalCode>{recipient.get('postalCode', '0')}</PostalCode>
                      <CountryCode>{recipient.get('country', 'US')}</CountryCode>
                   </Address>
@@ -571,8 +616,7 @@ class DHLService:
          </RequestedShipment>
       </ship:ShipmentRequest>
    </soapenv:Body>
-</soapenv:Envelope>"""
-            # Usar la URL exacta del ejemplo
+</soapenv:Envelope>"""            # Usar la URL exacta del ejemplo
             endpoint_url = "https://wsbexpress.dhl.com:443/sndpt/expressRateBook"
             headers = {
                 'Content-Type': 'text/xml; charset=utf-8',
@@ -583,7 +627,23 @@ class DHLService:
                 headers=headers,
                 data=soap_body
             )
-            return self._parse_response(response, "Shipment")
+            
+            result = self._parse_response(response, response.text, "Shipment")
+            
+            # Agregar información del tipo de contenido a la respuesta
+            if result.get('success'):
+                content_info = {
+                    'content_type': content_type,
+                    'content_xml': content_xml,
+                    'description': 'Paquetes con productos' if content_type == 'P' else 'Solo documentos'
+                }
+                result['content_info'] = content_info
+                
+                # Agregar información adicional del envío
+                if 'shipment_info' in result:
+                    result['shipment_info']['content_info'] = content_info
+            
+            return result
         except Exception as e:
             return {"success": False, "message": f"Error en create_shipment: {str(e)}"}
 
@@ -644,14 +704,12 @@ class DHLService:
             
             # Parsear la respuesta
             root = ET.fromstring(response.content)
-            
-            # Buscar errores específicos de cuenta inválida
+              # Buscar errores específicos de cuenta inválida
             notification_elements = root.findall('.//*[contains(local-name(), "Notification")]')
             for notification in notification_elements:
                 code = notification.get('code')
                 if code in ['1001', '1002', '1003']:  # Códigos de error relacionados con cuentas
                     return False
-            
             return True
             
         except Exception as e:
@@ -659,8 +717,8 @@ class DHLService:
             # For now, just print the error.
             print(f"Error validando cuenta DHL {account_number}: {str(e)}")
             return False
-
-    def _parse_response(self, response, service_type):
+    
+    def _parse_response(self, response, response_text, service_type):
         """Parsea la respuesta XML de DHL con manejo mejorado"""
         try:
             if response.status_code == 200:
@@ -673,17 +731,17 @@ class DHLService:
                 
                 # Buscar elementos específicos según el tipo de servicio
                 if service_type == "ePOD":
-                    return self._parse_epod_response(root, response.text)
+                    return self._parse_epod_response(root, response_text)
                 elif service_type == "Rate":
-                    return self._parse_rate_response(root, response.text)
+                    return self._parse_rate_response(root, response_text)
                 elif service_type == "Tracking":
-                    return self._parse_tracking_response(root, response.text)
+                    return self._parse_tracking_response(root, response_text)
                 elif service_type == "Shipment":
-                    return self._parse_shipment_response(root, response.text)
+                    return self._parse_shipment_response(root, response_text)
                 else:
                     return {
                         "success": True,
-                        "raw_response": response.text,
+                        "raw_response": response_text,
                         "message": "Respuesta procesada"
                     }
             
@@ -695,14 +753,14 @@ class DHLService:
                 "success": False,
                 "error_type": "xml_parse_error",
                 "message": f"Error parseando XML: {str(e)}",
-                "raw_response": response.text[:500]
+                "raw_response": response_text[:500]
             }
         except Exception as e:
             return {
                 "success": False,
                 "error_type": "unknown_error",
                 "message": f"Error procesando respuesta: {str(e)}",
-                "raw_response": response.text[:500]
+                "raw_response": response_text[:500]
             }
     
     def _is_fault_response(self, root):
@@ -786,56 +844,166 @@ class DHLService:
             }
                 
     def _parse_rate_response(self, root, response_text):
-        """Parser mejorado para respuestas de cotización"""
+        """Parser mejorado para respuestas de cotización basado en estructura real de DHL"""
         rates = []
         
-        # Buscar servicios usando múltiples estrategias
-        service_elements = root.findall('.//Service') + root.findall('.//*[contains(local-name(), "Service")]')
+        # Buscar Provider con código DHL
+        provider_elements = root.findall('.//Provider[@code="DHL"]')
+        if not provider_elements:
+            # Fallback: buscar cualquier Provider
+            provider_elements = root.findall('.//Provider')
+        
+        if not provider_elements:
+            return {
+                "success": False,
+                "message": "No se encontró información de proveedor en la respuesta",
+                "raw_response": response_text[:500]
+            }
+        
+        provider = provider_elements[0]
+        
+        # Verificar notificaciones de error
+        notification_elements = provider.findall('.//Notification')
+        for notification in notification_elements:
+            code = notification.get('code')
+            message_elem = notification.find('Message')
+            
+            if code and code != '0':  # Código 0 es éxito
+                error_message = message_elem.text if message_elem is not None else f"Error código {code}"
+                return {
+                    "success": False,
+                    "error_code": code,
+                    "message": f"Error DHL: {error_message}",
+                    "raw_response": response_text[:500]
+                }
+        
+        # Buscar servicios disponibles
+        service_elements = provider.findall('.//Service')
         
         for service_elem in service_elements:
             rate = {}
             
-            # Extraer información del servicio
-            for child in service_elem:
-                tag_name = child.tag.split('}')[-1] if '}' in child.tag else child.tag
+            # Obtener tipo de servicio
+            service_type = service_elem.get('type')
+            if service_type:
+                rate['service_code'] = service_type
                 
-                if tag_name == 'ServiceType':
-                    rate['service_code'] = child.text
-                elif tag_name == 'ServiceName':
-                    rate['service_name'] = child.text
-                elif tag_name == 'TotalNet':
-                    # Buscar monto y moneda
-                    for net_child in child:
-                        net_tag = net_child.tag.split('}')[-1] if '}' in net_child.tag else net_child.tag
-                        if net_tag == 'Amount':
-                            try:
-                                rate['total_charge'] = float(net_child.text) if net_child.text else 0
-                            except ValueError:
-                                rate['total_charge'] = 0
-                        elif net_tag == 'Currency':
-                            rate['currency'] = net_child.text
-                elif tag_name == 'DeliveryTime':
-                    # Extraer tiempo de entrega
-                    delivery_parts = []
-                    for dt_child in child:
-                        if dt_child.text:
-                            delivery_parts.append(dt_child.text)
-                    rate['delivery_time'] = ' '.join(delivery_parts) if delivery_parts else 'Unknown'
+                # Mapear códigos de servicio a nombres descriptivos
+                service_names = {
+                    'D': 'EXPRESS WORLDWIDE DOC',
+                    'P': 'EXPRESS WORLDWIDE',
+                    'U': 'EXPRESS WORLDWIDE',
+                    'K': 'EXPRESS 9:00',
+                    'L': 'EXPRESS 10:30',
+                    'G': 'DOMESTIC EXPRESS',
+                    'W': 'ECONOMY SELECT',
+                    'I': 'BREAK BULK EXPRESS',
+                    'N': 'DOMESTIC EXPRESS',
+                    'O': 'DOMESTIC EXPRESS'
+                }
+                rate['service_name'] = service_names.get(service_type, f"DHL Service {service_type}")
+                
+                # Agregar información sobre compatibilidad de contenido
+                content_compatibility = self.get_service_content_compatibility(service_type)
+                rate['content_compatibility'] = content_compatibility
+            
+            # Obtener información financiera
+            total_net_elem = service_elem.find('TotalNet')
+            if total_net_elem is not None:
+                currency_elem = total_net_elem.find('Currency')
+                amount_elem = total_net_elem.find('Amount')
+                
+                if currency_elem is not None and currency_elem.text:
+                    rate['currency'] = currency_elem.text
+                
+                if amount_elem is not None and amount_elem.text:
+                    try:
+                        rate['total_charge'] = float(amount_elem.text)
+                    except ValueError:
+                        rate['total_charge'] = 0.0
+            
+            # Obtener desglose de cargos
+            charges_elem = service_elem.find('Charges')
+            if charges_elem is not None:
+                charges = []
+                charge_elements = charges_elem.findall('Charge')
+                
+                for charge_elem in charge_elements:
+                    charge = {}
+                    
+                    # Código del cargo
+                    charge_code_elem = charge_elem.find('ChargeCode')
+                    if charge_code_elem is not None and charge_code_elem.text:
+                        charge['code'] = charge_code_elem.text
+                    
+                    # Tipo de cargo
+                    charge_type_elem = charge_elem.find('ChargeType')
+                    if charge_type_elem is not None and charge_type_elem.text:
+                        charge['description'] = charge_type_elem.text
+                    
+                    # Monto del cargo
+                    charge_amount_elem = charge_elem.find('ChargeAmount')
+                    if charge_amount_elem is not None and charge_amount_elem.text:
+                        try:
+                            charge['amount'] = float(charge_amount_elem.text)
+                        except ValueError:
+                            charge['amount'] = 0.0
+                    
+                    if charge.get('description') or charge.get('amount'):
+                        charges.append(charge)
+                
+                rate['charges'] = charges
+            
+            # Obtener tiempo de entrega
+            delivery_time_elem = service_elem.find('DeliveryTime')
+            if delivery_time_elem is not None and delivery_time_elem.text:
+                # Parsear fecha/hora de entrega
+                try:
+                    from datetime import datetime
+                    delivery_datetime = datetime.fromisoformat(delivery_time_elem.text.replace('Z', '+00:00'))
+                    rate['delivery_time'] = delivery_datetime.strftime('%Y-%m-%d %H:%M')
+                    rate['delivery_date'] = delivery_datetime.strftime('%Y-%m-%d')
+                except:
+                    rate['delivery_time'] = delivery_time_elem.text
+            
+            # Obtener tiempo de corte
+            cutoff_time_elem = service_elem.find('CutoffTime')
+            if cutoff_time_elem is not None and cutoff_time_elem.text:
+                try:
+                    from datetime import datetime
+                    cutoff_datetime = datetime.fromisoformat(cutoff_time_elem.text.replace('Z', '+00:00'))
+                    rate['cutoff_time'] = cutoff_datetime.strftime('%Y-%m-%d %H:%M')
+                except:
+                    rate['cutoff_time'] = cutoff_time_elem.text
+            
+            # Indicador de siguiente día hábil
+            next_business_day_elem = service_elem.find('NextBusinessDayInd')
+            if next_business_day_elem is not None and next_business_day_elem.text:
+                rate['next_business_day'] = next_business_day_elem.text == 'Y'
+            
+            # Asegurar valores por defecto
+            rate.setdefault('service_name', f"DHL Service {rate.get('service_code', 'Unknown')}")
+            rate.setdefault('total_charge', 0.0)
+            rate.setdefault('currency', 'USD')
+            rate.setdefault('delivery_time', 'Unknown')
+            rate.setdefault('charges', [])
             
             if rate.get('service_code'):
-                # Asegurar valores por defecto
-                rate.setdefault('service_name', f"Service {rate['service_code']}")
-                rate.setdefault('total_charge', 0.0)
-                rate.setdefault('currency', 'USD')
-                rate.setdefault('delivery_time', 'Unknown')
-                
                 rates.append(rate)
+        
+        if not rates:
+            return {
+                "success": False,
+                "message": "No se encontraron tarifas disponibles en la respuesta",
+                "raw_response": response_text[:500]
+            }
         
         return {
             "success": True,
             "rates": rates,
             "total_rates": len(rates),
-            "message": f"Se encontraron {len(rates)} tarifas disponibles"
+            "message": f"Se encontraron {len(rates)} tarifas disponibles",
+            "provider": "DHL"
         }
 
     def _parse_tracking_response(self, root, response_text):
@@ -847,46 +1015,51 @@ class DHLService:
             shipment_info = {}
             events = []
             
-            # Buscar AWB Number en la estructura real de DHL
-            awb_elements = root.findall('.//AWBNumber')
-            if awb_elements:
-                shipment_info['awb_number'] = awb_elements[0].text
-                shipment_info['tracking_number'] = awb_elements[0].text
-                logger.info(f"Found AWB Number: {awb_elements[0].text}")
+            # Buscar AWBInfo en la estructura real de DHL
+            awb_info_items = root.findall('.//AWBInfo/ArrayOfAWBInfoItem')
+            if not awb_info_items:
+                return {
+                    "success": False,
+                    "message": "No se encontró información AWB en la respuesta",
+                    "raw_response": response_text[:500]
+                }
             
-            # Buscar estado del envío
-            status_elements = root.findall('.//Status')
-            for status_elem in status_elements:
-                action_status = status_elem.find('.//ActionStatus')
-                if action_status is not None and action_status.text:
-                    shipment_info['status'] = action_status.text
-                    logger.info(f"Found Status: {action_status.text}")
-                    break
+            # Usar el primer AWBInfoItem
+            awb_info = awb_info_items[0]
+            
+            # Obtener AWB Number
+            awb_number_elem = awb_info.find('.//AWBNumber')
+            if awb_number_elem is not None and awb_number_elem.text:
+                shipment_info['awb_number'] = awb_number_elem.text
+                shipment_info['tracking_number'] = awb_number_elem.text
+                logger.info(f"Found AWB Number: {awb_number_elem.text}")
+            
+            # Obtener estado del envío
+            status_elem = awb_info.find('.//Status/ActionStatus')
+            if status_elem is not None and status_elem.text:
+                shipment_info['status'] = status_elem.text
+                logger.info(f"Found Status: {status_elem.text}")
             
             # Buscar información del envío
-            shipment_info_elem = root.find('.//ShipmentInfo')
+            shipment_info_elem = awb_info.find('.//ShipmentInfo')
             if shipment_info_elem is not None:
                 # Origen
-                origin_elem = shipment_info_elem.find('.//OriginServiceArea')
-                if origin_elem is not None:
-                    description = origin_elem.find('.//Description')
-                    if description is not None and description.text:
-                        shipment_info['origin'] = description.text
-                        logger.info(f"Found Origin: {description.text}")
+                origin_elem = shipment_info_elem.find('.//OriginServiceArea/Description')
+                if origin_elem is not None and origin_elem.text:
+                    shipment_info['origin'] = origin_elem.text
+                    logger.info(f"Found Origin: {origin_elem.text}")
                 
                 # Destino
-                dest_elem = shipment_info_elem.find('.//DestinationServiceArea')
-                if dest_elem is not None:
-                    description = dest_elem.find('.//Description')
-                    if description is not None and description.text:
-                        shipment_info['destination'] = description.text
-                        logger.info(f"Found Destination: {description.text}")
+                dest_elem = shipment_info_elem.find('.//DestinationServiceArea/Description')
+                if dest_elem is not None and dest_elem.text:
+                    shipment_info['destination'] = dest_elem.text
+                    logger.info(f"Found Destination: {dest_elem.text}")
                 
                 # Peso
                 weight_elem = shipment_info_elem.find('.//Weight')
                 if weight_elem is not None and weight_elem.text:
-                    weight_unit = shipment_info_elem.find('.//WeightUnit')
-                    unit = weight_unit.text if weight_unit is not None else 'K'
+                    weight_unit_elem = shipment_info_elem.find('.//WeightUnit')
+                    unit = weight_unit_elem.text if weight_unit_elem is not None else 'K'
                     shipment_info['weight'] = f"{weight_elem.text} {unit}"
                     logger.info(f"Found Weight: {weight_elem.text} {unit}")
                 
@@ -897,14 +1070,14 @@ class DHLService:
                     logger.info(f"Found Pieces: {pieces_elem.text}")
                 
                 # Fecha de envío
-                shipment_date = shipment_info_elem.find('.//ShipmentDate')
-                if shipment_date is not None and shipment_date.text:
-                    shipment_info['shipment_date'] = shipment_date.text
-                    logger.info(f"Found Shipment Date: {shipment_date.text}")
+                shipment_date_elem = shipment_info_elem.find('.//ShipmentDate')
+                if shipment_date_elem is not None and shipment_date_elem.text:
+                    shipment_info['shipment_date'] = shipment_date_elem.text.split('T')[0]  # Solo la fecha
+                    logger.info(f"Found Shipment Date: {shipment_info['shipment_date']}")
             
             # Buscar detalles de piezas individuales
             piece_details = []
-            piece_info_items = root.findall('.//PieceInfo/ArrayOfPieceInfoItem')
+            piece_info_items = awb_info.findall('.//Pieces/PieceInfo/ArrayOfPieceInfoItem')
             if piece_info_items:
                 logger.info(f"Found {len(piece_info_items)} piece info items")
                 for piece_item in piece_info_items:
@@ -928,7 +1101,7 @@ class DHLService:
                         actual_width = piece_details_elem.find('.//ActualWidth')
                         actual_height = piece_details_elem.find('.//ActualHeight')
                         if actual_depth is not None and actual_depth.text:
-                            piece_detail['actual_depth'] = actual_depth.text
+                            piece_detail['actual_length'] = actual_depth.text  # DHL usa depth como length
                         if actual_width is not None and actual_width.text:
                             piece_detail['actual_width'] = actual_width.text
                         if actual_height is not None and actual_height.text:
@@ -944,7 +1117,7 @@ class DHLService:
                         width = piece_details_elem.find('.//Width')
                         height = piece_details_elem.find('.//Height')
                         if depth is not None and depth.text:
-                            piece_detail['declared_depth'] = depth.text
+                            piece_detail['declared_length'] = depth.text
                         if width is not None and width.text:
                             piece_detail['declared_width'] = width.text
                         if height is not None and height.text:
@@ -969,59 +1142,60 @@ class DHLService:
                         weight_unit = piece_details_elem.find('.//WeightUnit')
                         if weight_unit is not None and weight_unit.text:
                             piece_detail['weight_unit'] = weight_unit.text
+                    
+                    # Procesar eventos de la pieza
+                    piece_events = piece_item.findall('.//PieceEvent/ArrayOfPieceEventItem')
+                    for event_elem in piece_events:
+                        event = {}
                         
-                        # Convertir a formato más legible
-                        if piece_detail.get('actual_depth') and piece_detail.get('actual_width') and piece_detail.get('actual_height'):
-                            piece_detail['actual_length'] = piece_detail['actual_depth']  # DHL usa depth como length
+                        # Fecha y hora
+                        date_elem = event_elem.find('.//Date')
+                        time_elem = event_elem.find('.//Time')
+                        if date_elem is not None and time_elem is not None:
+                            event['date'] = date_elem.text
+                            event['time'] = time_elem.text
+                            event['timestamp'] = f"{date_elem.text} {time_elem.text}"
+                        
+                        # Código y descripción del evento
+                        service_event = event_elem.find('.//ServiceEvent')
+                        if service_event is not None:
+                            event_code = service_event.find('.//EventCode')
+                            event_desc = service_event.find('.//Description')
+                            if event_code is not None and event_code.text:
+                                event['code'] = event_code.text
+                            if event_desc is not None and event_desc.text:
+                                event['description'] = event_desc.text
+                        
+                        # Ubicación
+                        service_area = event_elem.find('.//ServiceArea')
+                        if service_area is not None:
+                            description = service_area.find('.//Description')
+                            if description is not None and description.text:
+                                event['location'] = description.text
+                        
+                        # Firmante (para entregas)
+                        signatory = event_elem.find('.//Signatory')
+                        if signatory is not None and signatory.text:
+                            event['signatory'] = signatory.text
+                        
+                        # Agregar evento solo si tiene información útil
+                        if event.get('code') and event.get('timestamp'):
+                            # Crear clave única para evitar duplicados
+                            event_key = f"{event['timestamp']}_{event['code']}_{event.get('location', '')}"
+                            
+                            # Verificar si ya existe este evento
+                            if not any(e.get('_key') == event_key for e in events):
+                                event['_key'] = event_key  # Clave interna para deduplicación
+                                events.append(event)
+                                logger.info(f"Added unique event: {event.get('code', 'N/A')} - {event.get('description', 'N/A')}")
                     
                     if piece_detail:
                         piece_details.append(piece_detail)
                         logger.info(f"Parsed piece detail: Piece {piece_detail.get('piece_number', 'N/A')} - {piece_detail.get('license_plate', 'N/A')}")
             
-            # Buscar eventos de tracking en la estructura real de DHL
-            piece_events = root.findall('.//PieceEvent/ArrayOfPieceEventItem')
-            if piece_events:
-                logger.info(f"Found {len(piece_events)} piece events")
-                for event_elem in piece_events:
-                    event = {}
-                    
-                    # Fecha y hora
-                    date_elem = event_elem.find('.//Date')
-                    time_elem = event_elem.find('.//Time')
-                    if date_elem is not None and time_elem is not None:
-                        event['date'] = date_elem.text
-                        event['time'] = time_elem.text
-                        event['timestamp'] = f"{date_elem.text} {time_elem.text}"
-                    
-                    # Código y descripción del evento
-                    service_event = event_elem.find('.//ServiceEvent')
-                    if service_event is not None:
-                        event_code = service_event.find('.//EventCode')
-                        event_desc = service_event.find('.//Description')
-                        if event_code is not None and event_code.text:
-                            event['code'] = event_code.text
-                        if event_desc is not None and event_desc.text:
-                            event['description'] = event_desc.text
-                    
-                    # Ubicación
-                    service_area = event_elem.find('.//ServiceArea')
-                    if service_area is not None:
-                        description = service_area.find('.//Description')
-                        if description is not None and description.text:
-                            event['location'] = description.text
-                    
-                    # Firmante (para entregas)
-                    signatory = event_elem.find('.//Signatory')
-                    if signatory is not None and signatory.text:
-                        event['signatory'] = signatory.text
-                    
-                    if event:
-                        events.append(event)
-                        logger.info(f"Parsed event: {event.get('code', 'N/A')} - {event.get('description', 'N/A')}")
-            
-            # Si no se encontraron eventos de piezas, buscar eventos de envío generales
+            # Si no hay eventos de piezas, buscar eventos de envío generales
             if not events:
-                shipment_events = root.findall('.//ShipmentEvent/ArrayOfShipmentEventItem')
+                shipment_events = awb_info.findall('.//ShipmentEvent/ArrayOfShipmentEventItem')
                 if shipment_events:
                     logger.info(f"Found {len(shipment_events)} shipment events")
                     for event_elem in shipment_events:
@@ -1052,9 +1226,25 @@ class DHLService:
                             if description is not None and description.text:
                                 event['location'] = description.text
                         
-                        if event:
-                            events.append(event)
-                            logger.info(f"Parsed shipment event: {event.get('code', 'N/A')} - {event.get('description', 'N/A')}")
+                        # Firmante (para entregas)
+                        signatory = event_elem.find('.//Signatory')
+                        if signatory is not None and signatory.text:
+                            event['signatory'] = signatory.text
+                        
+                        # Agregar evento solo si tiene información útil
+                        if event.get('code') and event.get('timestamp'):
+                            # Crear clave única para evitar duplicados
+                            event_key = f"{event['timestamp']}_{event['code']}_{event.get('location', '')}"
+                            
+                            # Verificar si ya existe este evento
+                            if not any(e.get('_key') == event_key for e in events):
+                                event['_key'] = event_key  # Clave interna para deduplicación
+                                events.append(event)
+                                logger.info(f"Added unique shipment event: {event.get('code', 'N/A')} - {event.get('description', 'N/A')}")
+            
+            # Limpiar claves internas antes de devolver
+            for event in events:
+                event.pop('_key', None)
             
             # Ordenar eventos por fecha y hora
             events.sort(key=lambda x: f"{x.get('date', '')} {x.get('time', '')}")
@@ -1069,13 +1259,12 @@ class DHLService:
                 else:
                     shipment_info['status'] = 'Processing'
             
-            # Si no se encontró información básica, puede ser un error
+            # Validar que tenemos información básica
             if not shipment_info.get('awb_number') and not shipment_info.get('tracking_number'):
                 logger.warning("No se encontró información básica de tracking")
                 return {
                     "success": False,
-                    "message": "No se encontró información de tracking válida",
-                    "elements_found": self._get_element_summary(root),
+                    "message": "No se encontró información de tracking válida en la respuesta",
                     "raw_response": response_text[:500] + "..." if len(response_text) > 500 else response_text
                 }
             
@@ -1300,3 +1489,281 @@ class DHLService:
         
         # Formatear según lo que espera DHL
         return ship_date.strftime('%Y-%m-%dT%H:%M:%S') + 'GMT+00:00'
+    
+    def get_content_types(self):
+        """
+        Obtiene los tipos de contenido disponibles para DHL
+        
+        Returns:
+            list: Lista de tipos de contenido con información detallada
+        """
+        return [
+            {
+                'code': 'P',
+                'name': 'NON_DOCUMENTS',
+                'description': 'Paquetes con productos',
+                'xml_value': 'NON_DOCUMENTS',
+                'restrictions': [
+                    'Productos con valor comercial',
+                    'Requiere declaración de valor',
+                    'Sujeto a aranceles e impuestos'
+                ],
+                'typical_services': ['P', 'U', 'K', 'L', 'G', 'W', 'I', 'N', 'O']
+            },
+            {
+                'code': 'D',
+                'name': 'DOCUMENTS',
+                'description': 'Solo documentos',
+                'xml_value': 'DOCUMENTS',
+                'restrictions': [
+                    'Solo documentos sin valor comercial',
+                    'Peso máximo típico: 2 kg',
+                    'Sin declaración de valor'
+                ],
+                'typical_services': ['D']
+            }
+        ]
+
+    def get_service_content_compatibility(self, service_code):
+        """
+        Verifica qué tipos de contenido son compatibles con un servicio específico
+        
+        Args:
+            service_code (str): Código del servicio DHL
+            
+        Returns:
+            dict: Información de compatibilidad
+        """
+        # Servicios que solo manejan documentos
+        document_only_services = ['D']
+        
+        # Servicios que manejan paquetes (NON_DOCUMENTS)
+        package_services = ['P', 'U', 'K', 'L', 'G', 'W', 'I', 'N', 'O']
+        
+        if service_code in document_only_services:
+            return {
+                'service_code': service_code,
+                'supported_content_types': ['D'],
+                'default_content_type': 'D',
+                'restrictions': 'Solo documentos'
+            }
+        elif service_code in package_services:
+            return {
+                'service_code': service_code,
+                'supported_content_types': ['P', 'D'],
+                'default_content_type': 'P',
+                'restrictions': 'Paquetes y documentos'
+            }
+        else:
+            return {
+                'service_code': service_code,
+                'supported_content_types': ['P'],
+                'default_content_type': 'P',
+                'restrictions': 'Servicio desconocido, asumiendo paquetes'
+            }
+    
+    def get_content_type_comparison(self):
+        """
+        Obtiene una comparación detallada entre tipos de contenido DHL
+        
+        Returns:
+            dict: Comparación entre DOCUMENTS y NON_DOCUMENTS
+        """
+        return {
+            'comparison': {
+                'DOCUMENTS': {
+                    'code': 'D',
+                    'xml_value': 'DOCUMENTS',
+                    'description': 'Solo documentos sin valor comercial',
+                    'characteristics': [
+                        'Peso máximo típico: 2 kg',
+                        'Sin declaración de valor comercial',
+                        'Proceso de aduana simplificado',
+                        'Tarifas generalmente más bajas',
+                        'Tiempos de tránsito más rápidos'
+                    ],
+                    'restrictions': [
+                        'No puede contener productos físicos',
+                        'No puede tener valor comercial',
+                        'Limitaciones de peso y tamaño'
+                    ],
+                    'examples': [
+                        'Contratos',
+                        'Facturas',
+                        'Certificados',
+                        'Correspondencia',
+                        'Documentos legales'
+                    ]
+                },
+                'NON_DOCUMENTS': {
+                    'code': 'P',
+                    'xml_value': 'NON_DOCUMENTS',
+                    'description': 'Paquetes con productos físicos',
+                    'characteristics': [
+                        'Productos con valor comercial',
+                        'Requiere declaración de valor',
+                        'Proceso de aduana completo',
+                        'Sujeto a aranceles e impuestos',
+                        'Mayor flexibilidad en peso y tamaño'
+                    ],
+                    'restrictions': [
+                        'Productos prohibidos por país',
+                        'Restricciones de materiales peligrosos',
+                        'Requisitos de empaque especiales'
+                    ],
+                    'examples': [
+                        'Productos manufacturados',
+                        'Muestras comerciales',
+                        'Repuestos',
+                        'Regalos',
+                        'Mercancía general'
+                    ]
+                }
+            },
+            'response_differences': {
+                'DOCUMENTS': {
+                    'typical_services': ['D'],
+                    'pricing_factors': ['Peso', 'Destino', 'Urgencia'],
+                    'customs_processing': 'Simplificado',
+                    'transit_time': 'Más rápido'
+                },
+                'NON_DOCUMENTS': {
+                    'typical_services': ['P', 'U', 'K', 'L', 'G', 'W', 'I', 'N', 'O'],
+                    'pricing_factors': ['Peso', 'Destino', 'Urgencia', 'Valor declarado', 'Peso dimensional'],
+                    'customs_processing': 'Completo',
+                    'transit_time': 'Estándar'
+                }
+            },
+            'api_response_differences': {
+                'rate_calculation': {
+                    'DOCUMENTS': 'Basado principalmente en peso y destino',
+                    'NON_DOCUMENTS': 'Incluye peso dimensional y valor declarado'
+                },
+                'available_services': {
+                    'DOCUMENTS': 'Limitado a servicios de documentos',
+                    'NON_DOCUMENTS': 'Acceso a todos los servicios DHL'
+                },
+                'additional_charges': {
+                    'DOCUMENTS': 'Menos cargos adicionales',
+                    'NON_DOCUMENTS': 'Puede incluir cargos por valor, combustible, zona remota'
+                }
+            }
+        }
+
+    def validate_content_type_for_service(self, service_code, content_type):
+        """
+        Valida si un tipo de contenido es compatible con un servicio específico
+        
+        Args:
+            service_code (str): Código del servicio DHL
+            content_type (str): Tipo de contenido ('P' o 'D')
+            
+        Returns:
+            dict: Resultado de la validación
+        """
+        compatibility = self.get_service_content_compatibility(service_code)
+        
+        if content_type in compatibility['supported_content_types']:
+            return {
+                'valid': True,
+                'service_code': service_code,
+                'content_type': content_type,
+                'message': f"Tipo de contenido {content_type} es compatible con servicio {service_code}"
+            }
+        else:
+            return {
+                'valid': False,
+                'service_code': service_code,
+                'content_type': content_type,
+                'message': f"Tipo de contenido {content_type} NO es compatible con servicio {service_code}",
+                'supported_types': compatibility['supported_content_types'],
+                'suggestion': f"Use tipo de contenido {compatibility['default_content_type']} para este servicio"
+            }
+    
+    def suggest_content_type(self, shipment_description, shipment_value=None, weight=None):
+        """
+        Sugiere el tipo de contenido basado en la descripción y características del envío
+        
+        Args:
+            shipment_description (str): Descripción del contenido del envío
+            shipment_value (float): Valor declarado del envío (opcional)
+            weight (float): Peso del envío en kg (opcional)
+            
+        Returns:
+            dict: Sugerencia de tipo de contenido
+        """
+        description_lower = shipment_description.lower() if shipment_description else ""
+        
+        # Palabras clave que indican documentos
+        document_keywords = [
+            'documento', 'document', 'contract', 'contrato', 'invoice', 'factura',
+            'certificate', 'certificado', 'letter', 'carta', 'correspondence',
+            'correspondencia', 'legal', 'paper', 'papel', 'form', 'formulario',
+            'statement', 'declaración', 'report', 'reporte', 'manual'
+        ]
+        
+        # Palabras clave que indican productos
+        product_keywords = [
+            'product', 'producto', 'merchandise', 'mercancía', 'goods', 'bienes',
+            'sample', 'muestra', 'part', 'repuesto', 'component', 'componente',
+            'equipment', 'equipo', 'device', 'dispositivo', 'tool', 'herramienta',
+            'gift', 'regalo', 'clothing', 'ropa', 'electronics', 'electrónicos'
+        ]
+        
+        # Verificar palabras clave
+        has_document_keywords = any(keyword in description_lower for keyword in document_keywords)
+        has_product_keywords = any(keyword in description_lower for keyword in product_keywords)
+        
+        # Factores que sugieren NON_DOCUMENTS
+        suggests_non_documents = False
+        reasons = []
+        
+        if shipment_value and shipment_value > 0:
+            suggests_non_documents = True
+            reasons.append(f"Valor declarado: ${shipment_value}")
+        
+        if weight and weight > 2:
+            suggests_non_documents = True
+            reasons.append(f"Peso: {weight} kg (típico para paquetes)")
+        
+        if has_product_keywords:
+            suggests_non_documents = True
+            reasons.append("Descripción indica productos físicos")
+        
+        # Determinar sugerencia
+        if has_document_keywords and not suggests_non_documents:
+            suggested_type = 'D'
+            confidence = 'high'
+            reasoning = "Descripción indica documentos sin valor comercial"
+        elif suggests_non_documents:
+            suggested_type = 'P'
+            confidence = 'high' if len(reasons) > 1 else 'medium'
+            reasoning = f"Factores que indican productos: {', '.join(reasons)}"
+        else:
+            suggested_type = 'P'  # Default seguro
+            confidence = 'low'
+            reasoning = "No hay indicadores claros, usando NON_DOCUMENTS por seguridad"
+        
+        return {
+            'suggested_type': suggested_type,
+            'suggested_xml': 'DOCUMENTS' if suggested_type == 'D' else 'NON_DOCUMENTS',
+            'confidence': confidence,
+            'reasoning': reasoning,
+            'factors_analyzed': {
+                'description': shipment_description,
+                'value': shipment_value,
+                'weight': weight,
+                'has_document_keywords': has_document_keywords,
+                'has_product_keywords': has_product_keywords
+            },
+            'alternatives': {
+                'D': {
+                    'suitable_if': 'Solo documentos sin valor comercial',
+                    'restrictions': 'Peso máximo ~2kg, sin valor comercial'
+                },
+                'P': {
+                    'suitable_if': 'Cualquier producto físico con valor',
+                    'restrictions': 'Requiere declaración de valor y proceso aduanero'
+                }
+            }
+        }

@@ -51,6 +51,20 @@ class RateRequestSerializer(serializers.Serializer):
     destination = serializers.DictField()
     weight = serializers.FloatField()
     dimensions = serializers.DictField()
+    declared_weight = serializers.FloatField(required=False, allow_null=True,
+                                           help_text="Peso declarado en kg (opcional)")
+    service = serializers.ChoiceField(choices=[('P', 'NON_DOCUMENTS'), ('D', 'DOCUMENTS')],
+                                      default='P',
+                                      help_text="Tipo de contenido: P (NON_DOCUMENTS) o D (DOCUMENTS)")
+    account_number = serializers.CharField(max_length=50, required=False, allow_blank=True,
+                                           default='',
+                                           help_text="Número de cuenta DHL a usar para la cotización")
+    
+    def validate_declared_weight(self, value):
+        """Validar que el peso declarado sea positivo"""
+        if value is not None and value <= 0:
+            raise serializers.ValidationError("El peso declarado debe ser mayor que 0")
+        return value
 
 
 class TrackingRequestSerializer(serializers.Serializer):

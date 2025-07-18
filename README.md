@@ -38,7 +38,6 @@ Integración completa de la API de DHL Express MyDHL con backend en Django y fro
 - **Django 4.2.7** - Framework web
 - **Django REST Framework** - API REST
 - **PostgreSQL** - Base de datos
-
 - **Gunicorn** - Servidor WSGI
 - **Nginx** - Proxy reverso (producción)
 
@@ -49,6 +48,107 @@ Integración completa de la API de DHL Express MyDHL con backend en Django y fro
 - **React Router** - Navegación
 
 ### DevOps
+- **Docker** - Containerización
+- **Docker Compose** - Orquestación de contenedores
+
+## 🐳 Configuración Docker (Recomendado)
+
+Este proyecto está optimizado para ejecutarse completamente en Docker. Todos los comandos de Python se ejecutan dentro del contenedor.
+
+### Requisitos previos
+- Docker Desktop instalado
+- Docker Compose instalado
+
+### Comandos principales
+
+#### Gestión del entorno
+```bash
+# Iniciar todos los servicios
+docker-dev.bat up
+
+# Ver logs en tiempo real
+docker-dev.bat logs
+
+# Detener servicios
+docker-dev.bat down
+
+# Reiniciar servicios
+docker-dev.bat restart
+
+# Ver estado de contenedores
+docker-dev.bat status
+```
+
+#### Comandos Django
+```bash
+# Ejecutar migraciones
+django-manage.bat migrate
+
+# Crear migraciones
+django-manage.bat makemigrations
+
+# Crear superusuario
+django-manage.bat createsuperuser
+
+# Abrir shell de Django
+django-manage.bat shell
+
+# Ejecutar servidor de desarrollo
+django-manage.bat runserver
+```
+
+#### Comandos Python
+```bash
+# Ejecutar scripts Python
+python-docker.bat analyze_dhl_responses.py
+
+# Ejecutar código Python directamente
+python-docker.bat -c "import django; print(django.VERSION)"
+
+# Ejecutar módulos Python
+python-docker.bat -m pip list
+```
+
+#### Tests
+```bash
+# Ejecutar todos los tests
+test-docker.bat
+
+# Ejecutar tests específicos
+test-docker.bat dhl_api.tests.test_views
+```
+
+#### Gestión de dependencias
+```bash
+# Instalar paquetes
+pip-docker.bat install requests
+
+# Listar paquetes instalados
+pip-docker.bat list
+
+# Generar requirements.txt
+pip-docker.bat freeze > requirements.txt
+```
+
+#### Acceso a contenedores
+```bash
+# Shell del contenedor backend
+docker-shell.bat
+
+# Shell de PostgreSQL
+docker-dev.bat db-shell
+
+# Reset de base de datos
+docker-dev.bat reset-db
+```
+
+### URLs del proyecto
+- **Backend Django**: http://localhost:8001
+- **Frontend React**: http://localhost:3002
+- **PostgreSQL**: localhost:5433
+- **Admin Django**: http://localhost:8001/admin
+
+### DevOps Original
 - **Docker** - Contenedores
 - **Docker Compose** - Orquestación
 - **Nginx** - Proxy y estáticos

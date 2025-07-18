@@ -1,26 +1,19 @@
 const { createProxyMiddleware } = require('http-proxy-middleware');
 
 module.exports = function(app) {
-  // Proxy solo para requests de API
+  // Ajustar proxy para API de Django
   app.use(
     '/api',
     createProxyMiddleware({
-      target: 'http://backend:8000',
+      target: 'http://localhost:8000',
       changeOrigin: true,
       secure: false,
-      logLevel: 'silent',
-      pathRewrite: {
-        '^/api': '/api',
-      },
+      logLevel: 'silent'
     })
   );
 
-  // Bloquear requests de hot-reload
-  app.use('*.hot-update.json', (req, res) => {
+  // Bloquear archivos de hot-reload (JSON y JS)
+  app.use(/^\/.*\.hot-update\.(json|js)$/, (req, res) => {
     res.status(404).end();
   });
-  
-  app.use('*.hot-update.js', (req, res) => {
-    res.status(404).end();
-  });
-}; 
+};

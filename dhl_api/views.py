@@ -26,6 +26,7 @@ from .services import DHLService
 from .models import Shipment, RateQuote
 from faker import Faker
 from django.conf import settings
+import os
 
 logger = logging.getLogger(__name__)
 fake = Faker()
@@ -164,19 +165,28 @@ def rate_view(request):
     serializer = RateRequestSerializer(data=request.data)
     if serializer.is_valid():
         try:
+            # Instanciar servicio real de DHL
             dhl_service = DHLService(
                 username=settings.DHL_USERNAME,
                 password=settings.DHL_PASSWORD,
                 base_url=settings.DHL_BASE_URL,
                 environment=settings.DHL_ENVIRONMENT
             )
+            # Obtener tipo de servicio (P=NON_DOCUMENTS, D=DOCUMENTS)
+            service = serializer.validated_data.get('service', 'P')
+            # Llamar a get_rate con el tipo de contenido dinámico
+            # Obtener número de cuenta si se proporcionó en el request
+            account_number = serializer.validated_data.get('account_number') or None
             result = dhl_service.get_rate(
                 origin=serializer.validated_data['origin'],
                 destination=serializer.validated_data['destination'],
                 weight=serializer.validated_data['weight'],
-                dimensions=serializer.validated_data['dimensions']
+                dimensions=serializer.validated_data['dimensions'],
+                declared_weight=serializer.validated_data.get('declared_weight'),
+                content_type=service,
+                account_number=account_number
             )
-            
+
             # Agregar metadatos adicionales
             result['request_timestamp'] = datetime.now().isoformat()
             result['requested_by'] = request.user.username
@@ -231,52 +241,87 @@ def rate_view(request):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([AllowAny])
 def tracking_view(request):
     """
     Endpoint para rastrear envíos DHL usando el número de tracking.
     """
     try:
         tracking_number = request.data.get('tracking_number')
-        logger.info(f"Tracking request received for {tracking_number} by {request.user.username}")
+        username = request.user.username if request.user.is_authenticated else 'anonymous'
+        logger.info(f"Tracking request received for {tracking_number} by {username}")
         
-        # Validar número de tracking
+        
         if not tracking_number:
             logger.warning("No tracking number provided")
             return Response({
                 'success': False,
                 'message': 'Número de tracking requerido',
                 'request_timestamp': datetime.now(),
-                'requested_by': request.user.username
+                'requested_by': username
             }, status=status.HTTP_400_BAD_REQUEST)
         
-        # Obtener cuenta DHL predeterminada o la primera disponible
-        dhl_account = DHLAccount.objects.filter(created_by=request.user).first()
-        if not dhl_account:
-            logger.error(f"No DHL account found for user {request.user.username}")
+        
+        try:
+            dhl_account = None
+            if request.user.is_authenticated:
+                dhl_account = DHLAccount.objects.filter(created_by=request.user).first()
+                if not dhl_account:
+                    logger.info(f"No DHL account found for user {request.user.username}, creating default account")
+                    
+                    
+                    dhl_account = DHLAccount.objects.create(
+                        account_number="706065602",
+                        account_name="Cuenta DHL por defecto",
+                        is_active=True,
+                        is_default=True,
+                        created_by=request.user,
+                        validation_status='pending'
+                    )
+                    logger.info(f"Default DHL account created for user {request.user.username}")
+            else:
+                logger.info("Using default DHL configuration for anonymous user")
+                
+        except Exception as e:
+            logger.error(f"Error creating default DHL account: {str(e)}")
             return Response({
                 'success': False,
-                'message': 'No se encontró una cuenta DHL configurada',
+                'message': 'Error al crear cuenta DHL por defecto. Contacta al administrador.',
+                'error_code': 'DB_ERROR',
                 'request_timestamp': datetime.now(),
-                'requested_by': request.user.username
-            }, status=status.HTTP_400_BAD_REQUEST)
+                'requested_by': username
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         
-        logger.info(f"Using DHL account: {dhl_account.account_name} ({dhl_account.account_number})")
+        if dhl_account:
+            logger.info(f"Using DHL account: {dhl_account.account_name} ({dhl_account.account_number})")
+        else:
+            logger.info("Using default DHL configuration from settings")
         
-        # Crear instancia del servicio DHL usando configuración desde settings
-        dhl_service = DHLService(
-            username=settings.DHL_USERNAME,
-            password=settings.DHL_PASSWORD,
-            base_url=settings.DHL_BASE_URL,
-            environment=settings.DHL_ENVIRONMENT
-        )
+        # Usar siempre el servicio real
+        logger.info(f"Using real DHL service for tracking number {tracking_number}")
         
-        # Obtener información de tracking
-        logger.info(f"Calling DHL service for tracking number {tracking_number}")
-        tracking_info = dhl_service.get_tracking(tracking_number)
-        logger.info(f"DHL service response: {tracking_info}")
+        try:
+            dhl_service = DHLService(
+                username=settings.DHL_USERNAME,
+                password=settings.DHL_PASSWORD,
+                base_url=settings.DHL_BASE_URL,
+                environment=settings.DHL_ENVIRONMENT
+            )
+            
+            # Obtener información de tracking
+            tracking_info = dhl_service.get_tracking(tracking_number)
+            logger.info(f"DHL service response: {tracking_info}")
+            
+        except Exception as e:
+            logger.error(f"Error with real DHL service: {str(e)}")
+            return Response({
+                'success': False,
+                'message': f'Error interno: {str(e)}',
+                'error_type': 'internal_error',
+                'request_timestamp': datetime.now().isoformat()
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         
-        # Preparar respuesta
+        
         response_data = {
             'success': tracking_info.get('success', False),
             'tracking_info': tracking_info.get('tracking_info', {}),
@@ -287,14 +332,17 @@ def tracking_view(request):
             'message': tracking_info.get('message', ''),
             'request_timestamp': datetime.now(),
             'tracking_number': tracking_number,
-            'requested_by': request.user.username
+            'requested_by': request.user.username,
+            'is_simulated': tracking_info.get('is_simulated', False),
+            'simulation_reason': tracking_info.get('simulation_reason', None)
         }
         
         if not tracking_info.get('success'):
             logger.warning(f"Tracking failed for {tracking_number}: {tracking_info.get('message')}")
             response_data.update({
-                'error_code': 'SERVER_ERROR',
-                'suggestion': 'Reintentar más tarde'
+                'error_code': tracking_info.get('error_code', 'TRACKING_ERROR'),
+                'suggestion': tracking_info.get('suggestion', 'Reintentar más tarde'),
+                'raw_response': tracking_info.get('raw_response', '')
             })
             return Response(response_data, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         
@@ -562,129 +610,6 @@ def shipment_view(request):
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
-def test_data_view(request):
-    """
-    Endpoint para generar datos de prueba para desarrollo y testing.
-    
-    Este endpoint permite generar datos de prueba simulados para diferentes
-    operaciones DHL sin realizar llamadas reales a la API. Útil para
-    desarrollo, testing y demostraciones.
-    
-    **Método HTTP:** GET
-    **Permisos:** Usuario autenticado (IsAuthenticated)
-    
-    **Parámetros de consulta (query params):**
-    - data_type (str, opcional): Tipo de datos a generar
-        - "rates": Datos de cotización
-        - "tracking": Datos de seguimiento
-        - "epod": Datos de ePOD
-        - "shipment": Datos de envío
-        - "all": Todos los tipos (default)
-    - count (int, opcional): Cantidad de registros a generar (default: 1)
-    - seed (int, opcional): Semilla para reproducibilidad (default: random)
-    
-    **Respuesta exitosa (200):**
-    {
-        "success": true,
-        "test_data": {
-            "shipper": {
-                "name": "John Doe",
-                "company": "ABC Corp",
-                "phone": "+1-555-123-4567",
-                "email": "john@example.com",
-                "address": "123 Main St",
-                "city": "New York",
-                "postal_code": "10001",
-                "country": "US"
-            },
-            "consignee": {
-                "name": "Jane Smith",
-                "company": "XYZ Inc",
-                "phone": "+1-555-987-6543",
-                "email": "jane@example.com",
-                "address": "456 Oak Ave",
-                "city": "Los Angeles",
-                "postal_code": "90001",
-                "country": "US"
-            },
-            "package": {
-                "weight": 2.5,
-                "dimensions": {
-                    "length": 25,
-                    "width": 15,
-                    "height": 10
-                }
-            }
-        },
-        "request_timestamp": "2025-07-07T10:30:00",
-        "requested_by": "username"
-    }
-    
-    **Respuesta de error (500):**
-    {
-        "success": false,
-        "message": "Error descriptivo",
-        "error_type": "internal_error",
-        "request_timestamp": "2025-07-07T10:30:00"
-    }
-    
-    **Notas:**
-    - Los datos generados son ficticios y no representan datos reales
-    - Se registra cada solicitud en los logs para auditoría
-    - Los errores se manejan de forma consistente con metadatos
-    """
-    try:
-        # Generar datos de prueba con Faker
-        test_data = {
-            'shipper': {
-                'name': fake.name(),
-                'company': fake.company(),
-                'phone': fake.phone_number(),
-                'email': fake.email(),
-                'address': fake.street_address(),
-                'city': fake.city(),
-                'state': fake.state_abbr(),
-                'postalCode': fake.postcode(),
-                'country': 'US'
-            },
-            'recipient': {
-                'name': fake.name(),
-                'company': fake.company(),
-                'phone': fake.phone_number(),
-                'email': fake.email(),
-                'address': fake.street_address(),
-                'city': fake.city(),
-                'state': fake.state_abbr(),
-                'postalCode': fake.postcode(),
-                'country': 'US'
-            },
-            'package': {
-                'weight': round(fake.random.uniform(0.5, 10.0), 2),
-                'length': round(fake.random.uniform(5, 50), 1),
-                'width': round(fake.random.uniform(5, 30), 1),
-                'height': round(fake.random.uniform(2, 20), 1),
-                'description': fake.sentence(nb_words=6),
-                'value': round(fake.random.uniform(10, 500), 2),
-                'currency': 'USD'
-            }
-        }
-        
-        return Response({
-            'success': True,
-            'data': test_data
-        })
-        
-    except Exception as e:
-        logger.error(f"Error en test_data_view: {str(e)}")
-        return Response({
-            'success': False,
-            'message': f'Error interno: {str(e)}'
-        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-
-@api_view(['GET'])
-@permission_classes([IsAuthenticated])
-@cache_page(60 * 15)  # Cache por 15 minutos
 def shipments_list_view(request):
     """Endpoint para listar envíos del usuario"""
     try:
