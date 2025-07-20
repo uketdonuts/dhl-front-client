@@ -7,10 +7,70 @@ y este proyecto se adhiere al [Versionado Semántico](https://semver.org/lang/es
 
 ## [Unreleased]
 ### Added
-- Configuración completa de las instrucciones de Copilot
-- Estructura base del changelog con formato Keep a Changelog
-- Reglas de desarrollo para backend Django y frontend React
-- Manejo automático del changelog en todas las modificaciones
+- **Botón "Crear Shipment" en Cotizaciones**: Nueva funcionalidad para crear shipments desde resultados de cotización
+  - Botón "📦 Crear Shipment" en cada tarjeta de servicio cotizado
+  - Pre-llenado automático de datos de shipment con información de la cotización
+  - Navegación automática al tab "Crear Envío" al hacer clic
+  - Notificación elegante mostrando los datos pre-llenados
+  - Conversión automática de datos: origen/destino, peso, dimensiones, servicio DHL
+  - Campos de remitente/destinatario pre-configurados (editables por el usuario)
+  - Integración completa con el flujo existente de creación de shipments
+
+### Fixed
+- **Información de Compatibilidad de Servicios**: Corregida la función `get_service_content_compatibility`
+  - Agregados códigos de servicio DHL reales (N, P, T, Y, U, K, L, Q, D, W)
+  - Eliminado mensaje "Servicio desconocido, asumiendo paquetes"
+  - Información más precisa sobre compatibilidad con documentos, paquetes y pallets
+  - Descripción mejorada de cada tipo de servicio DHL
+- **Vista de Compatibilidad**: Mejora en la presentación del componente RateResults
+  - Reorganización de la información de compatibilidad en grid
+  - Indicadores visuales mejorados (✅/❌) para cada tipo de contenido
+  - Tipo de servicio visible en vista resumida
+  - Script de prueba para validar compatibilidad de servicios
+- **Parsing de Respuestas DHL**: Mejorado el procesamiento de datos de cotización
+  - Extracción correcta de desglose detallado de precios desde `detailedPriceBreakdown`
+  - Conversión de moneda de BILLC a USD real con `priceCurrency`
+  - Extracción de fechas y horarios de entrega desde `estimatedDeliveryDateAndTime`
+  - Extracción de horarios límite desde `localCutoffDateAndTime`
+  - Información de peso mejorada con cálculo de peso facturable
+  - Manejo correcto de múltiples tipos de moneda (BILLC, BASEC)
+  - Campos de `charges` ahora poblados correctamente con conceptos reales
+
+### Removed
+- **Elementos de UI innecesarios**: Limpieza de la interfaz de usuario
+  - Eliminada sección "Análisis de Peso" del componente RateResults
+  - Eliminada sección "Configuración del Envío" del componente RateResults
+  - Eliminada sección "Información del Servicio" con compatibilidad de documentos/paquetes/pallets
+  - Eliminada nota informativa (consejo) al final de los resultados
+  - Removidos botones "Cargar Datos de Prueba SOAP" del Dashboard
+  - Eliminada función `loadSoapTestData` no utilizada
+  - Removido indicador de tipo de servicio en vista resumida
+
+### Added
+- **Cotizador con Detalles Expandibles**: Nueva interfaz de usuario para cotizaciones DHL
+  - Componente `RateResults` con vista resumida y detallada
+  - Botones "Ver detalles" para explorar información completa de cada servicio
+  - Desglose detallado de precios (conceptos individuales)
+  - Información de peso facturable (real, dimensional, declarado)
+  - Datos de entrega detallados (fechas, horas límite, próximo día hábil)
+  - Compatibilidad de contenido (documentos, paquetes, pallets)
+  - Configuración del envío (tipo, aduanas, cuenta DHL)
+  - Validación automática de cálculos de precios
+  - Script de prueba mejorado `test_rate_simple.py` con interactividad
+- **Script de Demostración**: Script interactivo para probar cotizaciones con detalles expandibles
+
+### Changed
+- **Migración SOAP a REST**: Migración completa de la API DHL de SOAP/XML a REST/JSON
+  - Eliminación completa de endpoints SOAP legacy
+  - Migración de ePOD (electronic Proof of Delivery) a endpoint REST moderno
+  - Eliminación de todas las dependencias XML (xml.etree.ElementTree)
+  - Unificación en API REST moderna de DHL Express MyDHL
+  - Mejor rendimiento y mantenimiento del código
+  - Parsing JSON nativo en lugar de XML
+  - Endpoints REST: `/rates`, `/tracking`, `/shipments`, `/proof-of-delivery`
+- **Dashboard Frontend**: Integración del nuevo componente `RateResults` en lugar de la vista básica
+
+### Added
 - **Optimización Copilot**: Instrucciones de Copilot optimizadas para reducir tokens (~60% menos)
   - Formato más conciso y estructurado
   - Mantiene toda la información esencial
@@ -48,6 +108,51 @@ y este proyecto se adhiere al [Versionado Semántico](https://semver.org/lang/es
   - Guía de troubleshooting
 
 ### Fixed
+- **Migración completa a API REST**: Eliminado completamente el uso de XML/SOAP en favor de JSON/REST
+  - Actualizado endpoint de cotizaciones: `https://express.api.dhl.com/expressapi/rates`
+  - Actualizado endpoint de tracking: `https://express.api.dhl.com/expressapi/shipments/{}/tracking`
+  - Actualizado endpoint de shipments: `https://express.api.dhl.com/expressapi/shipments`
+  - Eliminados todos los métodos SOAP y XML parsing
+  - Implementado `_get_rest_headers()` para autenticación HTTP Basic
+  - Implementado `_parse_rest_response()` para manejar respuestas JSON
+  - Implementado `_parse_rest_rate_response()` para parsing de cotizaciones
+  - Implementado `_parse_rest_tracking_response()` para parsing de tracking
+  - Actualizado método `validate_account()` para usar API REST
+- **Cotizador DHL**: Progreso en la solución del problema "SERVER_ERROR"
+  - Identificado problema: La API REST de DHL requiere endpoints específicos
+  - Cambio de HTTP 500 a HTTP 404 (progreso en la conexión)
+  - Investigación de endpoints correctos: `/expressapi/rates` vs `/mydhlapi/rates`
+  - Implementado manejo completo de respuestas REST JSON
+  - Eliminado parsing XML obsoleto
+  - Mejorado sistema de logging para debugging REST
+- **Estructura de datos**: Actualizado formato de request para API REST
+  - Reemplazado XML SOAP por JSON payload estructurado
+  - Implementado campos requeridos: `customerDetails`, `accounts`, `packages`
+  - Agregado soporte para `plannedShippingDateAndTime` automático
+  - Implementado conversión automática de `content_type` a `isCustomsDeclarable`
+  - Mejorado cálculo de peso facturable para API REST
+- **Endpoints modernos**: Migración completa a arquitectura REST
+  - Sandbox: `https://express.api.dhl.com/mydhlapi/test/`
+  - Producción: `https://express.api.dhl.com/expressapi/`
+  - Eliminados endpoints SOAP legacy
+  - Implementado patrón de URLs dinámicas para tracking
+  - Agregado soporte para múltiples endpoints (rates, tracking, shipments, products)
+
+### Technical Notes
+- **API Migration**: Transición completa de SOAP/XML a REST/JSON
+- **Endpoint Investigation**: Probando diferentes rutas de API DHL
+- **Estado actual**: Recibiendo HTTP 404, indica que el endpoint o la autenticación requieren ajustes
+- **Próximos pasos**: Validar credenciales y endpoints correctos para API REST de DHL
+
+### Changed
+- **Endpoints DHL**: Configuración mejorada con soporte para sandbox y producción
+- **Headers HTTP**: Headers simplificados para requests de cotización
+- **Parsing de respuestas**: Mejorado parsing de errores de validación XML
+
+### Technical Notes
+- **Progreso en Cotizador**: Evolución de HTTP 500 a errores específicos de validación
+- **Próximos pasos**: Ajustar estructura XML del elemento `ClientDetail` según documentación DHL
+- **Estado actual**: Recibiendo respuestas HTTP 200 con errores de validación específicos (progreso significativo)
 - **Scripts Docker**: Corregidos nombres de contenedores en todos los scripts .bat
 - **✅ PROXY ERROR RESOLVED**: Error crítico de proxy "Error occurred while trying to proxy: localhost:3002/api/dhl/tracking/" 
   - **Causa raíz**: Errores de sintaxis en `services.py` y `views.py` causaban crash del backend

@@ -12,7 +12,7 @@ services:
     environment:
       - DEBUG=True
       - SECRET_KEY=tu-clave-secreta-super-segura-cambiala-en-produccion
-      - ALLOWED_HOSTS=localhost,127.0.0.1,0.0.0.0,backend,backend:8000
+      - ALLOWED_HOSTS=localhost,127.0.0.1,0.0.0.0,backend,backend:8000,dhl-django-backend,dhl-django-backend:8000,172.19.0.3,172.19.0.3:8000
       - DB_NAME=dhl_db
       - DB_USER=dhl_user
       - DB_PASSWORD=dhl_password
@@ -20,7 +20,7 @@ services:
       - DB_PORT=5432
       - DHL_USERNAME=apO3fS5mJ8zT7h
       - DHL_PASSWORD=J^4oF@1qW!0qS!5b
-      - DHL_BASE_URL=https://wsbexpress.dhl.com
+      - DHL_BASE_URL=https://express.api.dhl.com
       - DHL_ENVIRONMENT=production
       - CORS_ALLOWED_ORIGINS=http://localhost:3000,http://localhost:3002,http://127.0.0.1:3000
     volumes:

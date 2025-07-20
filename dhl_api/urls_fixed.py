@@ -7,7 +7,6 @@ urlpatterns = [
     
     # Endpoints DHL
     path('dhl/rate/', views.rate_view, name='rate'),
-    path('dhl/rate/compare/', views.rate_compare_view, name='rate_compare'),
     path('dhl/tracking/', views.tracking_view, name='tracking'),
     path('dhl/epod/', views.epod_view, name='epod'),
     path('dhl/shipment/', views.shipment_view, name='shipment'),
@@ -28,7 +27,4 @@ urlpatterns = [
     path('accounts/create/', views.dhl_account_create, name='dhl_account_create'),
     path('accounts/<int:account_id>/delete/', views.dhl_account_delete, name='dhl_account_delete'),
     path('accounts/<int:account_id>/set-default/', views.dhl_account_set_default, name='dhl_account_set_default'),
-    
-    # Endpoint temporal para pruebas
-    path('test-frontend-rate/', views.test_frontend_rate_view, name='test_frontend_rate'),
 ]

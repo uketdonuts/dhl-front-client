@@ -163,6 +163,14 @@ def rate_view(request):
     - Los errores se manejan de forma consistente con metadatos
     """
     serializer = RateRequestSerializer(data=request.data)
+    
+    # Agregar logging para debugging
+    logger.info(f"=== RATE REQUEST DEBUG ===")
+    logger.info(f"Raw request data: {request.data}")
+    logger.info(f"Serializer valid: {serializer.is_valid()}")
+    if not serializer.is_valid():
+        logger.error(f"Serializer errors: {serializer.errors}")
+    
     if serializer.is_valid():
         try:
             # Instanciar servicio real de DHL
@@ -177,6 +185,16 @@ def rate_view(request):
             # Llamar a get_rate con el tipo de contenido dinámico
             # Obtener número de cuenta si se proporcionó en el request
             account_number = serializer.validated_data.get('account_number') or None
+            
+            # Logging para debugging
+            logger.info(f"=== CALLING DHL SERVICE ===")
+            logger.info(f"Origin: {serializer.validated_data['origin']}")
+            logger.info(f"Destination: {serializer.validated_data['destination']}")
+            logger.info(f"Weight: {serializer.validated_data['weight']}")
+            logger.info(f"Dimensions: {serializer.validated_data['dimensions']}")
+            logger.info(f"Account number: {account_number}")
+            logger.info(f"Service: {service}")
+            
             result = dhl_service.get_rate(
                 origin=serializer.validated_data['origin'],
                 destination=serializer.validated_data['destination'],
@@ -237,6 +255,106 @@ def rate_view(request):
         'message': 'Datos inválidos para cotización',
         'error_type': 'validation_error',
         'errors': serializer.errors
+    }, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def rate_compare_view(request):
+    """
+    Endpoint para comparar tarifas entre DOCUMENTS y NON_DOCUMENTS.
+    
+    Permite a los usuarios entender las diferencias de precio y restricciones
+    entre enviar algo como documento vs como paquete.
+    
+    **Método HTTP:** POST
+    **Permisos:** Usuario autenticado (IsAuthenticated)
+    
+    **Parámetros de entrada (JSON):** (Mismos que rate_view)
+    - origin (dict): Información del origen
+    - destination (dict): Información del destino  
+    - weight (float): Peso del paquete en kg
+    - dimensions (dict): Dimensiones del paquete
+    
+    **Respuesta exitosa (200):**
+    {
+        "success": true,
+        "comparison_type": "DOCUMENTS vs NON_DOCUMENTS",
+        "packages_rates": [...],
+        "documents_rates": [...],
+        "summary": {
+            "packages_count": 3,
+            "documents_count": 2,
+            "cheapest_option": {...},
+            "price_differences": [...]
+        },
+        "recommendations": [...],
+        "important_differences": [...],
+        "customs_info": {...}
+    }
+    """
+    serializer = RateRequestSerializer(data=request.data)
+    
+    logger.info(f"=== RATE COMPARE REQUEST ===")
+    logger.info(f"User: {request.user.username}")
+    logger.info(f"Request data: {request.data}")
+    
+    if serializer.is_valid():
+        try:
+            # Instanciar servicio DHL
+            dhl_service = DHLService(
+                username=settings.DHL_USERNAME,
+                password=settings.DHL_PASSWORD,
+                base_url=settings.DHL_BASE_URL,
+                environment=settings.DHL_ENVIRONMENT
+            )
+            
+            # Obtener número de cuenta
+            account_number = serializer.validated_data.get('account_number') or None
+            
+            logger.info(f"=== CALLING DHL COMPARISON SERVICE ===")
+            logger.info(f"Account number: {account_number}")
+            
+            # Llamar al servicio de comparación
+            result = dhl_service.compare_content_types(
+                origin=serializer.validated_data['origin'],
+                destination=serializer.validated_data['destination'],
+                weight=serializer.validated_data['weight'],
+                dimensions=serializer.validated_data['dimensions'],
+                declared_weight=serializer.validated_data.get('declared_weight'),
+                account_number=account_number
+            )
+            
+            # Agregar metadatos
+            result['request_timestamp'] = datetime.now().isoformat()
+            result['requested_by'] = request.user.username
+            
+            logger.info(f"Comparison request by {request.user.username}: {result.get('success', False)}")
+            
+            if result.get('success'):
+                pkg_count = len(result.get('packages_rates', {}).get('rates', []))
+                doc_count = len(result.get('documents_rates', {}).get('rates', []))
+                logger.info(f"Comparison successful: {pkg_count} package rates, {doc_count} document rates")
+            
+            return Response(result)
+            
+        except Exception as e:
+            logger.error(f"Error en rate_compare_view: {str(e)}")
+            return Response({
+                'success': False,
+                'message': f'Error en comparación: {str(e)}',
+                'error_type': 'internal_error',
+                'request_timestamp': datetime.now().isoformat(),
+                'requested_by': request.user.username
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    
+    return Response({
+        'success': False,
+        'message': 'Datos inválidos para comparación',
+        'error_type': 'validation_error',
+        'errors': serializer.errors,
+        'request_timestamp': datetime.now().isoformat(),
+        'requested_by': request.user.username
     }, status=status.HTTP_400_BAD_REQUEST)
 
 
@@ -1194,3 +1312,68 @@ def dhl_account_set_default(request, account_id):
             'success': False,
             'message': 'Cuenta no encontrada'
         }, status=status.HTTP_404_NOT_FOUND)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def test_frontend_rate_view(request):
+    """
+    Endpoint temporal para probar la cotización con los datos exactos del frontend
+    """
+    import json
+    
+    # Datos exactos del frontend Dashboard.js
+    frontend_data = {
+        "origin": {
+            "postal_code": "0000",
+            "city": "Panama",
+            "country": "PA",
+            "state": "PA"
+        },
+        "destination": {
+            "postal_code": "110111",
+            "city": "BOG", 
+            "country": "CO"
+        },
+        "weight": 45,
+        "dimensions": {
+            "length": 20,
+            "width": 15,
+            "height": 10
+        },
+        "declared_weight": 45,
+        "service": "P",
+        "account_number": "706014493"
+    }
+    
+    try:
+        dhl_service = DHLService()
+        
+        result = dhl_service.get_rate(
+            origin_country=frontend_data["origin"]["country"],
+            origin_postal_code=frontend_data["origin"]["postal_code"],
+            origin_city=frontend_data["origin"]["city"],
+            destination_country=frontend_data["destination"]["country"],
+            destination_postal_code=frontend_data["destination"]["postal_code"],
+            destination_city=frontend_data["destination"]["city"],
+            weight=frontend_data["weight"],
+            length=frontend_data["dimensions"]["length"],
+            width=frontend_data["dimensions"]["width"],
+            height=frontend_data["dimensions"]["height"],
+            declared_weight=frontend_data["declared_weight"],
+            content_type=frontend_data["service"],
+            account_number=frontend_data["account_number"]
+        )
+        
+        # Agregar información de los datos de entrada para debugging
+        result['frontend_data_used'] = frontend_data
+        
+        return Response(result)
+        
+    except Exception as e:
+        logger.error(f"Error en test_frontend_rate_view: {str(e)}")
+        return Response({
+            'success': False,
+            'error': str(e),
+            'frontend_data_used': frontend_data
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
