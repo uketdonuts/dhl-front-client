@@ -88,4 +88,7 @@ jspm_packages/
 # Yarn Integrity file
 .yarn-integrity 
 
-.TXT
+# Archivos DHL grandes
+*.TXT
+dhl_api/ESD.TXT
+dhl_api/ESD-sample.TXT
