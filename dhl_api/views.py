@@ -426,12 +426,204 @@ def tracking_view(request):
                 environment=settings.DHL_ENVIRONMENT
             )
             
-            # Obtener información de tracking
-            tracking_info = dhl_service.get_tracking(tracking_number)
-            logger.info(f"DHL service response: {tracking_info}")
+            # HOTFIX: Usar parsing directo para evitar error de parsing
+            import requests
+            import json
+            
+            # Hacer la llamada directa a DHL (REST API)
+            tracking_url = f"https://express.api.dhl.com/mydhlapi/shipments/{tracking_number}/tracking"
+            params = {
+                "trackingView": "all-checkpoints",
+                "levelOfDetail": "all"
+            }
+            headers = dhl_service._get_rest_headers()
+            
+            response = requests.get(tracking_url, headers=headers, params=params, verify=False, timeout=30)
+            logger.info(f"DHL Direct Response Status: {response.status_code}")
+            
+            if response.status_code == 200:
+                # Parsing completo directo
+                data = response.json()
+                shipments = data.get('shipments', [])
+                
+                if shipments:
+                    shipment = shipments[0]
+                    
+                    # Función auxiliar para extraer ubicación de forma segura
+                    def safe_extract_location(location_details):
+                        try:
+                            if not location_details or not isinstance(location_details, dict):
+                                return {"description": "Desconocido", "code": "", "full_address": ""}
+                            
+                            service_areas = location_details.get('serviceArea', [])
+                            postal = location_details.get('postalAddress', {})
+                            
+                            description = "Desconocido"
+                            code = ""
+                            
+                            if service_areas and len(service_areas) > 0:
+                                description = str(service_areas[0].get('description', 'Desconocido'))
+                                code = str(service_areas[0].get('code', ''))
+                            elif postal:
+                                city = postal.get('cityName', '')
+                                country = postal.get('countryCode', '')
+                                description = f"{city}, {country}".strip(', ') or "Desconocido"
+                            
+                            # Construir dirección completa
+                            full_address_parts = []
+                            if postal:
+                                if postal.get('addressLine1'): full_address_parts.append(postal.get('addressLine1'))
+                                if postal.get('addressLine2'): full_address_parts.append(postal.get('addressLine2'))
+                                if postal.get('cityName'): full_address_parts.append(postal.get('cityName'))
+                                if postal.get('postalCode'): full_address_parts.append(postal.get('postalCode'))
+                                if postal.get('countryCode'): full_address_parts.append(postal.get('countryCode'))
+                            
+                            return {
+                                "description": description,
+                                "code": code,
+                                "full_address": ", ".join(full_address_parts) if full_address_parts else description,
+                                "city": postal.get('cityName', '') if postal else '',
+                                "country": postal.get('countryCode', '') if postal else '',
+                                "postal_code": postal.get('postalCode', '') if postal else ''
+                            }
+                        except Exception as e:
+                            logger.warning(f"Error extracting location: {e}")
+                            return {"description": "Error en ubicación", "code": "", "full_address": ""}
+                    
+                    # Extraer eventos de tracking si están disponibles
+                    events = []
+                    shipment_events = shipment.get('events', [])
+                    for event in shipment_events:
+                        try:
+                            event_data = {
+                                'date': str(event.get('date', '')),
+                                'time': str(event.get('time', '')),
+                                'description': str(event.get('description', '')),
+                                'location': str(event.get('location', '')),
+                                'status_code': str(event.get('statusCode', '')),
+                                'service_area': str(event.get('serviceArea', {}).get('description', '') if event.get('serviceArea') else '')
+                            }
+                            events.append(event_data)
+                        except:
+                            continue
+                    
+                    # Extraer detalles de piezas si están disponibles
+                    pieces = []
+                    piece_details = shipment.get('pieces', [])
+                    for piece in piece_details:
+                        try:
+                            piece_data = {
+                                'piece_id': str(piece.get('pieceId', '')),
+                                'weight': float(piece.get('weight', 0)),
+                                'weight_unit': str(piece.get('weightUnit', 'KG')),
+                                'dimensions': {
+                                    'length': float(piece.get('dimensions', {}).get('length', 0) if piece.get('dimensions') else 0),
+                                    'width': float(piece.get('dimensions', {}).get('width', 0) if piece.get('dimensions') else 0),
+                                    'height': float(piece.get('dimensions', {}).get('height', 0) if piece.get('dimensions') else 0),
+                                    'unit': str(piece.get('dimensions', {}).get('unit', 'CM') if piece.get('dimensions') else 'CM')
+                                },
+                                'package_type': str(piece.get('packageType', '')),
+                                'description': str(piece.get('description', ''))
+                            }
+                            pieces.append(piece_data)
+                        except:
+                            continue
+                    
+                    # Extraer información del origen y destino
+                    origin_info = safe_extract_location(shipment.get('shipperDetails', {}))
+                    destination_info = safe_extract_location(shipment.get('receiverDetails', {}))
+                    
+                    # Información adicional del envío
+                    total_weight = 0
+                    total_pieces = len(pieces)
+                    
+                    if pieces:
+                        total_weight = sum(piece.get('weight', 0) for piece in pieces)
+                    
+                    # Mapear códigos de servicio DHL a nombres descriptivos
+                    service_names = {
+                        'N': 'DHL Express Worldwide',
+                        'S': 'DHL Express 12:00',
+                        'G': 'DHL Express 10:30',
+                        'W': 'DHL Express 9:00',
+                        'Y': 'DHL Express Before 12:00',
+                        'U': 'DHL Express Worldwide Documents',
+                        'D': 'DHL Express Documents',
+                        'T': 'DHL Express Envelope',
+                        'Q': 'DHL Express (General)',
+                        'P': 'DHL Express Package'
+                    }
+                    
+                    service_code = str(shipment.get('productCode', 'Unknown'))
+                    service_name = service_names.get(service_code, f'Servicio DHL {service_code}')
+                    
+                    # Crear respuesta completa con todos los detalles
+                    tracking_info = {
+                        'success': True,
+                        'tracking_info': {
+                            'tracking_number': str(shipment.get('shipmentTrackingNumber', '')),
+                            'status': str(shipment.get('status', 'Unknown')),
+                            'status_description': str(shipment.get('status', 'Unknown')),
+                            'service': service_code,
+                            'service_name': service_name,
+                            'service_type': service_code,
+                            'description': str(shipment.get('description', 'Unknown')),
+                            'shipment_timestamp': str(shipment.get('shipmentTimestamp', '')),
+                            'origin': origin_info['description'],
+                            'origin_details': origin_info,
+                            'destination': destination_info['description'],
+                            'destination_details': destination_info,
+                            'total_weight': total_weight,
+                            'weight_unit': 'kg',
+                            'number_of_pieces': total_pieces,
+                            'estimated_delivery': str(shipment.get('estimatedDeliveryDate', '')),
+                            'product_name': str(shipment.get('productName', service_name))
+                        },
+                        'events': events,
+                        'piece_details': pieces,
+                        'total_events': len(events),
+                        'total_pieces': total_pieces,
+                        'message': f'Tracking completo encontrado - {len(events)} eventos, {total_pieces} piezas',
+                        'shipment_details': {
+                            'shipper_name': str(shipment.get('shipperDetails', {}).get('name', '') if shipment.get('shipperDetails') else ''),
+                            'receiver_name': str(shipment.get('receiverDetails', {}).get('name', '') if shipment.get('receiverDetails') else ''),
+                            'product_code': service_code,
+                            'product_name': service_name,
+                            'currency_code': str(shipment.get('currencyCode', 'USD')),
+                            'unit_of_measurement': str(shipment.get('unitOfMeasurement', 'SI'))
+                        }
+                    }
+                    
+                    # Copiar para compatibilidad frontend
+                    tracking_info['shipment_info'] = tracking_info['tracking_info'].copy()
+                    
+                else:
+                    tracking_info = {
+                        'success': False,
+                        'message': 'No se encontraron envíos',
+                        'tracking_info': {},
+                        'shipment_info': {},
+                        'events': [],
+                        'piece_details': [],
+                        'total_events': 0,
+                        'total_pieces': 0
+                    }
+            else:
+                tracking_info = {
+                    'success': False,
+                    'message': f'Error DHL API: {response.status_code}',
+                    'tracking_info': {},
+                    'shipment_info': {},
+                    'events': [],
+                    'piece_details': [],
+                    'total_events': 0,
+                    'total_pieces': 0
+                }
+            
+            logger.info(f"DHL service response (hotfix): {tracking_info}")
             
         except Exception as e:
-            logger.error(f"Error with real DHL service: {str(e)}")
+            logger.error(f"Error with DHL hotfix: {str(e)}")
             return Response({
                 'success': False,
                 'message': f'Error interno: {str(e)}',
@@ -536,7 +728,8 @@ def epod_view(request):
                 environment=settings.DHL_ENVIRONMENT
             )
             result = dhl_service.get_ePOD(
-                shipment_id=serializer.validated_data['shipment_id']
+                shipment_id=serializer.validated_data['shipment_id'],
+                account_number=serializer.validated_data.get('account_number')
             )
             
             # Agregar metadatos adicionales
@@ -644,8 +837,16 @@ def shipment_view(request):
                 base_url=settings.DHL_BASE_URL,
                 environment=settings.DHL_ENVIRONMENT
             )
+            
+            # Transformar los datos para el servicio DHL
+            shipment_data = serializer.validated_data.copy()
+            
+            # Convertir 'package' (singular) a 'packages' (plural) que espera el servicio
+            if 'package' in shipment_data:
+                shipment_data['packages'] = [shipment_data.pop('package')]
+            
             result = dhl_service.create_shipment(
-                shipment_data=serializer.validated_data
+                shipment_data=shipment_data
             )
             
             # Agregar metadatos adicionales
@@ -655,10 +856,9 @@ def shipment_view(request):
             # Guardar envío en la base de datos si es exitoso
             if result.get('success'):
                 try:
-                    shipment_data = serializer.validated_data
                     shipper = shipment_data['shipper']
                     recipient = shipment_data['recipient']
-                    package = shipment_data['package']
+                    package = shipment_data['packages'][0]  # Tomar el primer paquete
                     
                     shipment = Shipment.objects.create(
                         tracking_number=result.get('tracking_number'),
@@ -793,191 +993,6 @@ def rates_history_view(request):
             'message': f'Error interno: {str(e)}'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-
-@api_view(['POST'])
-@permission_classes([IsAuthenticated])
-def test_dhl_credentials_view(request):
-    """
-    Endpoint para probar las credenciales DHL en tiempo real.
-    
-    Este endpoint permite probar las credenciales DHL configuradas realizando
-    una llamada real a la API de DHL para verificar que las credenciales
-    son válidas y que los servicios están disponibles.
-    
-    **Método HTTP:** POST
-    **Permisos:** Usuario autenticado (IsAuthenticated)
-    
-    **Parámetros de entrada (JSON):**
-    - service_type (str, opcional): Tipo de servicio a probar
-        - "rates": Probar servicio de cotización
-        - "tracking": Probar servicio de seguimiento
-        - "epod": Probar servicio de ePOD (default)
-        - "shipment": Probar servicio de creación de envíos
-        - "all": Probar todos los servicios
-    - test_data (dict, opcional): Datos específicos para la prueba
-    
-    **Respuesta exitosa (200):**
-    {
-        "success": true,
-        "credential_test": {
-            "test_timestamp": "2025-07-07T10:30:00",
-            "service_type": "epod",
-            "credentials_valid": true,
-            "response_time": 1.25,
-            "service_available": true,
-            "test_details": {
-                "request_sent": true,
-                "response_received": true,
-                "authentication_successful": true,
-                "service_functional": true
-            }
-        },
-        "request_timestamp": "2025-07-07T10:30:00",
-        "requested_by": "username"
-    }
-    
-    **Respuesta de error (400/500):**
-    {
-        "success": false,
-        "message": "Error descriptivo",
-        "error_type": "validation_error|credential_error|internal_error",
-        "request_timestamp": "2025-07-07T10:30:00"
-    }
-    
-    **Notas:**
-    - Esta función realiza llamadas reales a la API de DHL
-    - Se registra cada prueba en los logs para auditoría
-    - Los errores se manejan de forma consistente con metadatos
-    """
-    try:
-        # Obtener el tipo de servicio a probar (por defecto ePOD)
-        service_type = request.data.get('service_type', 'epod')
-        test_data = request.data.get('test_data', {})
-        
-        dhl_service = DHLService(
-            username=settings.DHL_USERNAME,
-            password=settings.DHL_PASSWORD,
-            base_url=settings.DHL_BASE_URL,
-            environment=settings.DHL_ENVIRONMENT
-        )
-        
-        result = {
-            'request_timestamp': datetime.now().isoformat(),
-            'requested_by': request.user.username,
-            'service_type': service_type,
-            'credentials_used': {
-                'username': settings.DHL_USERNAME,
-                'base_url': settings.DHL_BASE_URL,
-                'environment': settings.DHL_ENVIRONMENT
-            }
-        }
-        
-        if service_type == 'epod':
-            # Probar ePOD con ID de prueba
-            shipment_id = test_data.get('shipment_id', '2287013540')
-            test_result = dhl_service.get_ePOD(shipment_id)
-            result.update(test_result)
-            result['test_parameters'] = {'shipment_id': shipment_id}
-            
-        elif service_type == 'tracking':
-            # Probar tracking con número de prueba
-            tracking_number = test_data.get('tracking_number', '1234567890')
-            test_result = dhl_service.get_tracking(tracking_number)
-            result.update(test_result)
-            result['test_parameters'] = {'tracking_number': tracking_number}
-            
-        elif service_type == 'rate':
-            # Probar cotización con datos de prueba
-            origin = test_data.get('origin', {
-                'postal_code': '12345',
-                'city': 'Test City',
-                'country': 'US',
-                'state': 'CA'
-            })
-            destination = test_data.get('destination', {
-                'postal_code': '54321',
-                'city': 'Destination City',
-                'country': 'US',
-                'state': 'NY'
-            })
-            weight = test_data.get('weight', 1.5)
-            dimensions = test_data.get('dimensions', {
-                'length': 10,
-                'width': 10,
-                'height': 10
-            })
-            
-            test_result = dhl_service.get_rate(origin, destination, weight, dimensions)
-            result.update(test_result)
-            result['test_parameters'] = {
-                'origin': origin,
-                'destination': destination,
-                'weight': weight,
-                'dimensions': dimensions
-            }
-            
-        elif service_type == 'shipment':
-            # Probar creación de envío con datos de prueba
-            shipment_data = test_data if test_data else {
-                'shipper': {
-                    'name': 'Test Shipper',
-                    'company': 'Test Company',
-                    'phone': '1234567890',
-                    'email': 'test@example.com',
-                    'address': '123 Test St',
-                    'city': 'Test City',
-                    'state': 'CA',
-                    'postalCode': '12345',
-                    'country': 'US'
-                },
-                'recipient': {
-                    'name': 'Test Recipient',
-                    'company': 'Recipient Company',
-                    'phone': '0987654321',
-                    'email': 'recipient@example.com',
-                    'address': '456 Recipient St',
-                    'city': 'Recipient City',
-                    'state': 'NY',
-                    'postalCode': '54321',
-                    'country': 'US'
-                },
-                'package': {
-                    'weight': 1.5,
-                    'length': 10,
-                    'width': 10,
-                    'height': 10,
-                    'description': 'Test Package',
-                    'value': 100,
-                    'currency': 'USD'
-                },
-                'service': 'P',
-                'payment': 'S'
-            }
-            
-            test_result = dhl_service.create_shipment(shipment_data)
-            result.update(test_result)
-            result['test_parameters'] = shipment_data
-            
-        else:
-            return Response({
-                'success': False,
-                'message': 'Tipo de servicio no válido. Opciones: epod, tracking, rate, shipment',
-                'error_type': 'validation_error'
-            }, status=status.HTTP_400_BAD_REQUEST)
-        
-        # Log del resultado para debugging
-        logger.info(f"DHL credentials test for {service_type} by {request.user.username}: {result.get('success', False)}")
-        
-        return Response(result)
-        
-    except Exception as e:
-        logger.error(f"Error en test_dhl_credentials_view: {str(e)}")
-        return Response({
-            'success': False,
-            'message': f'Error interno: {str(e)}',
-            'error_type': 'internal_error',
-            'request_timestamp': datetime.now().isoformat()
-        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
@@ -1312,68 +1327,3 @@ def dhl_account_set_default(request, account_id):
             'success': False,
             'message': 'Cuenta no encontrada'
         }, status=status.HTTP_404_NOT_FOUND)
-
-
-@api_view(['GET'])
-@permission_classes([AllowAny])
-def test_frontend_rate_view(request):
-    """
-    Endpoint temporal para probar la cotización con los datos exactos del frontend
-    """
-    import json
-    
-    # Datos exactos del frontend Dashboard.js
-    frontend_data = {
-        "origin": {
-            "postal_code": "0000",
-            "city": "Panama",
-            "country": "PA",
-            "state": "PA"
-        },
-        "destination": {
-            "postal_code": "110111",
-            "city": "BOG", 
-            "country": "CO"
-        },
-        "weight": 45,
-        "dimensions": {
-            "length": 20,
-            "width": 15,
-            "height": 10
-        },
-        "declared_weight": 45,
-        "service": "P",
-        "account_number": "706014493"
-    }
-    
-    try:
-        dhl_service = DHLService()
-        
-        result = dhl_service.get_rate(
-            origin_country=frontend_data["origin"]["country"],
-            origin_postal_code=frontend_data["origin"]["postal_code"],
-            origin_city=frontend_data["origin"]["city"],
-            destination_country=frontend_data["destination"]["country"],
-            destination_postal_code=frontend_data["destination"]["postal_code"],
-            destination_city=frontend_data["destination"]["city"],
-            weight=frontend_data["weight"],
-            length=frontend_data["dimensions"]["length"],
-            width=frontend_data["dimensions"]["width"],
-            height=frontend_data["dimensions"]["height"],
-            declared_weight=frontend_data["declared_weight"],
-            content_type=frontend_data["service"],
-            account_number=frontend_data["account_number"]
-        )
-        
-        # Agregar información de los datos de entrada para debugging
-        result['frontend_data_used'] = frontend_data
-        
-        return Response(result)
-        
-    except Exception as e:
-        logger.error(f"Error en test_frontend_rate_view: {str(e)}")
-        return Response({
-            'success': False,
-            'error': str(e),
-            'frontend_data_used': frontend_data
-        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

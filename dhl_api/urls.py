@@ -19,7 +19,7 @@ urlpatterns = [
     # Historial de cotizaciones
     path('rates/history/', views.rates_history_view, name='rates_history'),
     
-    # Nuevos endpoints para testing y monitoreo
+    # Nuevos endpoints para monitoreo
     path('dhl-status/', views.dhl_status_view, name='dhl_status'),
     path('validate-shipment-date/', views.validate_shipment_date_view, name='validate_shipment_date'),
 
@@ -28,7 +28,4 @@ urlpatterns = [
     path('accounts/create/', views.dhl_account_create, name='dhl_account_create'),
     path('accounts/<int:account_id>/delete/', views.dhl_account_delete, name='dhl_account_delete'),
     path('accounts/<int:account_id>/set-default/', views.dhl_account_set_default, name='dhl_account_set_default'),
-    
-    # Endpoint temporal para pruebas
-    path('test-frontend-rate/', views.test_frontend_rate_view, name='test_frontend_rate'),
 ]

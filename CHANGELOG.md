@@ -6,7 +6,42 @@ El formato está basado en [Keep a Changelog](https://keepachangelog.com/es/1.0.
 y este proyecto se adhiere al [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
+### Changed
+- **MEJORA CRÍTICA - Integración Completa del Dropdown de Cuentas**: Sincronización total de la cuenta seleccionada (706091269) con todas las operaciones DHL
+  - **Envíos (Shipment)**: El dropdown ahora influye en la creación de envíos, incluyendo `account_number` en `shipmentData`
+  - **Tracking**: Las consultas de rastreo ahora incluyen `account_number` para mayor precisión
+  - **ePOD (Proof of Delivery)**: Los comprobantes de entrega ahora usan la cuenta seleccionada
+  - **Cotizaciones (Rate)**: Mantenida la sincronización existente con el dropdown
+  - **Shipment desde Rate**: La creación de envíos desde cotizaciones usa la cuenta seleccionada
+  - **Cuenta por Defecto**: Actualizada de 706014493 a 706091269 en todas las operaciones
+  - **Sincronización Automática**: useEffect que actualiza todas las operaciones cuando cambia selectedAccount
+
 ### Added
+- **Módulo ePOD (Electronic Proof of Delivery)**: Nuevo módulo completo para obtener comprobantes de entrega
+  - **Formulario de ePOD**: Input para número de tracking de envíos entregados
+  - **Descarga de Comprobantes**: Botón principal para descargar el PDF de comprobante de entrega
+  - **Documentos Múltiples**: Soporte para descargar documentos adicionales si están disponibles
+  - **Información Técnica**: Detalles del documento (tipo, formato, tamaño)
+  - **Validación de Estado**: Verificación de que el envío esté entregado antes de mostrar ePOD
+  - **Nueva Consulta**: Opción para limpiar formulario y hacer nueva búsqueda
+- **Pestaña de Tracking**: Nueva funcionalidad completa de rastreo de envíos
+  - **Formulario de Tracking**: Input para ingresar número de tracking con validación
+  - **Resultados Detallados**: Muestra estado, origen, destino, servicio y fecha estimada
+  - **Historial de Eventos**: Timeline completo con ubicaciones y fechas de cada evento
+  - **Enlace a DHL Oficial**: Botón directo al tracking en dhl.com
+  - **Botón "Ver Tracking Aquí"**: Navegación directa desde resultados de shipment
+  - **Nueva Consulta**: Opción para limpiar formulario y hacer nueva búsqueda
+- **Visualización Completa de Respuesta de Shipment**: Nueva interfaz mejorada para mostrar toda la información de envíos creados
+  - **Tracking Principal**: Muestra el número de seguimiento principal con diseño destacado
+  - **URL de Rastreo DHL**: Botón directo para rastrear en el sitio web de DHL
+  - **Información de Paquetes**: Lista detallada de todos los paquetes individuales con sus tracking numbers
+  - **Descarga de Documentos**: Funcionalidad para descargar etiquetas y documentos PDF desde contenido base64
+  - **Información Adicional**: Detalles completos del envío (ID, estado, tipo de contenido, fecha, usuario)
+  - **Botón "Crear Otro Envío"**: Opción para limpiar el formulario y crear un nuevo envío
+
+### Removed
+- **Botón "Rastrear Envío en DHL"**: Eliminado el enlace externo al sitio web de DHL desde los resultados de shipment
+- **Función downloadDocument**: Utilidad para convertir contenido base64 a PDF descargable
 - **Botón "Crear Shipment" en Cotizaciones**: Nueva funcionalidad para crear shipments desde resultados de cotización
   - Botón "📦 Crear Shipment" en cada tarjeta de servicio cotizado
   - Pre-llenado automático de datos de shipment con información de la cotización
@@ -15,6 +50,34 @@ y este proyecto se adhiere al [Versionado Semántico](https://semver.org/lang/es
   - Conversión automática de datos: origen/destino, peso, dimensiones, servicio DHL
   - Campos de remitente/destinatario pre-configurados (editables por el usuario)
   - Integración completa con el flujo existente de creación de shipments
+
+### Changed
+- **Configuración de entorno**: Cambiado DHL_ENVIRONMENT de 'sandbox' a 'production' por defecto
+- **Endpoints corregidos**: URLs de tracking y ePOD actualizadas para coincidir con backend
+
+### Removed
+- **Pestaña "Comparar Tipos"**: Eliminada funcionalidad de comparación DOCUMENTS vs NON_DOCUMENTS
+  - Función `compareContentTypes` y estados relacionados eliminados
+  - Interfaz simplificada enfocada en funcionalidades principales
+- **Servicios DHL**: Eliminada lógica de sandbox, solo endpoints de producción
+
+### Removed
+- **Archivos de testing**: Eliminados todos los archivos de prueba y testing
+  - `test_shipment_fix.py`, `test_rate_demo.py`, `test_improved_parsing.py`
+  - `test_frontend_rate_data.py`, `simple_test.py`, `quick_test.py`
+  - `frontend_test_data.json`, `test-docker.bat`, `validate-docker.bat`
+  - Archivos en `dhl_api/`: `test_service_compatibility.py`, `test_rate_simple.py`, `test_data.py`
+  - `dhl_integration.py` (simulador de datos)
+  - Comando de management: `setup_simulator.py`
+- **Funciones de testing en views.py**: Eliminadas funciones de prueba
+  - `test_dhl_credentials_view()` 
+  - `test_frontend_rate_view()`
+- **Rutas de testing**: Eliminadas rutas de endpoints de prueba en `urls.py`
+- **Tareas de testing**: Eliminadas tareas de VS Code para tests
+  - "Django: Ejecutar tests"
+  - "Docker: Validar entorno"
+- **Configuración sandbox**: Eliminada lógica de endpoints de testing en `services.py`
+- **Funciones de comparación**: Eliminadas funciones incompletas de testing al final de `services.py`
 
 ### Fixed
 - **Información de Compatibilidad de Servicios**: Corregida la función `get_service_content_compatibility`

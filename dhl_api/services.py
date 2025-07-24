@@ -19,27 +19,16 @@ class DHLService:
         logger.info(f"Base URL: {base_url}")
         
         # Configuración de endpoints DHL - API REST moderna (solo JSON)
-        if environment == "sandbox":
-            self.endpoints = {
-                "rate": "https://express.api.dhl.com/mydhlapi/test/rates",
-                "tracking": "https://express.api.dhl.com/mydhlapi/test/shipments/{}/tracking",
-                "shipment": "https://express.api.dhl.com/mydhlapi/test/shipments",
-                "pickup": "https://express.api.dhl.com/mydhlapi/test/pickups",
-                "products": "https://express.api.dhl.com/mydhlapi/test/products",
-                "address": "https://express.api.dhl.com/mydhlapi/test/address-validate",
-                "epod": "https://express.api.dhl.com/mydhlapi/test/shipments/{}/proof-of-delivery"
-            }
-        else:
-            # Endpoints para producción
-            self.endpoints = {
-                "rate": "https://express.api.dhl.com/mydhlapi/rates",
-                "tracking": "https://express.api.dhl.com/mydhlapi/shipments/{}/tracking", 
-                "shipment": "https://express.api.dhl.com/mydhlapi/shipments",
-                "pickup": "https://express.api.dhl.com/mydhlapi/pickups",
-                "products": "https://express.api.dhl.com/mydhlapi/products",
-                "address": "https://express.api.dhl.com/mydhlapi/address-validate",
-                "epod": "https://express.api.dhl.com/mydhlapi/shipments/{}/proof-of-delivery"
-            }
+        # Solo endpoints de producción
+        self.endpoints = {
+            "rate": "https://express.api.dhl.com/mydhlapi/rates",
+            "tracking": "https://express.api.dhl.com/mydhlapi/shipments/{}/tracking", 
+            "shipment": "https://express.api.dhl.com/mydhlapi/shipments",
+            "pickup": "https://express.api.dhl.com/mydhlapi/pickups",
+            "products": "https://express.api.dhl.com/mydhlapi/products",
+            "address": "https://express.api.dhl.com/mydhlapi/address-validate",
+            "epod": "https://express.api.dhl.com/mydhlapi/shipments/{}/proof-of-delivery"
+        }
         
         logger.info(f"REST Endpoints configured: {self.endpoints}")
 
@@ -84,19 +73,21 @@ class DHLService:
         # Limitar longitud a 15 caracteres
         return cleaned[:15]
 
-    def get_ePOD(self, shipment_id, account_number=None, content_type="epod-detail"):
+    def get_ePOD(self, shipment_id, account_number=None, content_type="epod-summary"):
         """
         Obtiene comprobante de entrega electrónico usando la API REST moderna de DHL
         
         Args:
             shipment_id (str): Número de tracking del envío
             account_number (str): Número de cuenta del shipper (opcional)
-            content_type (str): Tipo de contenido ePOD 
+            content_type (str): Tipo de contenido ePOD según documentación oficial DHL:
                                - "epod-detail": Detalle completo
-                               - "epod-summary": Resumen
+                               - "epod-summary": Resumen (default)
                                - "epod-detail-esig": Detalle con firma electrónica
                                - "epod-summary-esig": Resumen con firma electrónica
                                - "epod-table": Formato tabla
+                               - "epod-table-detail": Tabla con detalle
+                               - "epod-table-esig": Tabla con firma electrónica
         """
         try:
             logger.info(f"Getting ePOD for shipment: {shipment_id} with content type: {content_type}")
@@ -105,11 +96,21 @@ class DHLService:
             if not shipment_id or not str(shipment_id).strip():
                 return {"success": False, "message": "Número de tracking requerido"}
             
+            # Validar tipo de contenido según documentación oficial
+            valid_content_types = [
+                "epod-detail", "epod-summary", "epod-detail-esig", 
+                "epod-summary-esig", "epod-table", "epod-table-detail", "epod-table-esig"
+            ]
+            if content_type not in valid_content_types:
+                logger.warning(f"Invalid content type {content_type}, using default 'epod-summary'")
+                content_type = "epod-summary"
+            
             # Limpiar el número de tracking
             shipment_id = str(shipment_id).strip()
             
             # Usar cuenta por defecto si no se proporciona
             account_to_use = account_number if account_number else '706014493'
+            logger.info(f"ePOD: Using account_number={account_number}, final account_to_use={account_to_use}")
             
             # Formatear la URL con el número de tracking
             endpoint_url = self.endpoints["epod"].format(shipment_id)
@@ -423,11 +424,13 @@ class DHLService:
             # Headers para API REST
             headers = self._get_rest_headers()
             
-            # Parámetros de query opcionales
+            # Parámetros de query opcionales - TEST VERSION - usando valores válidos
             params = {
-                "trackingView": "shipment-details",
-                "levelOfDetail": "shipment"
+                "trackingView": "all-checkpoints",  # Valor válido según API 
+                "levelOfDetail": "all"  # Valor válido: shipment, piece, all - UPDATED
             }
+            
+            logger.info(f"TRACKING DEBUG: Using params: {params}")  # Debug adicional
             
             logger.debug(f"Request Headers: {headers}")
             logger.debug(f"Request Params: {params}")
@@ -509,6 +512,26 @@ class DHLService:
             service_type = shipment_data.get('service', 'P')
             account_number = shipment_data.get('account_number', '706014493')
             
+            # Validar que haya al menos un paquete
+            if not packages or len(packages) == 0:
+                return {
+                    "success": False,
+                    "message": "Debe incluir al menos un paquete en el envío",
+                    "error_type": "validation_error",
+                    "error_code": "NO_PACKAGES"
+                }
+            
+            # Validar que todos los paquetes tengan peso válido
+            for i, package in enumerate(packages):
+                weight = package.get('weight', 0)
+                if not weight or float(weight) <= 0:
+                    return {
+                        "success": False,
+                        "message": f"El paquete {i+1} debe tener un peso mayor que 0",
+                        "error_type": "validation_error",
+                        "error_code": "INVALID_WEIGHT"
+                    }
+            
             # Calcular fecha de envío (mañana para asegurar disponibilidad)
             from datetime import datetime, timedelta
             tomorrow = datetime.now() + timedelta(days=1)
@@ -518,8 +541,7 @@ class DHLService:
             shipment_payload = {
                 "plannedShippingDateAndTime": shipping_date,
                 "pickup": {
-                    "typeCode": "scheduled",
-                    "accountNumber": account_number
+                    "isRequested": False
                 },
                 "productCode": service_type,
                 "accounts": [
@@ -568,6 +590,10 @@ class DHLService:
                 }
             }
             
+            # Agregar incoterm si es declarable
+            if is_customs_declarable:
+                shipment_payload["content"]["incoterm"] = "DAP"  # Delivered At Place - el más común
+            
             # Agregar paquetes
             total_value = 0
             for i, package in enumerate(packages):
@@ -606,7 +632,7 @@ class DHLService:
                             "description": "General Merchandise",
                             "price": total_value,
                             "quantity": {
-                                "value": len(packages),
+                                "value": max(1, len(packages)),  # Asegurar que sea >= 1
                                 "unitOfMeasurement": "PCS"
                             },
                             "commodityCodes": [
@@ -734,8 +760,17 @@ class DHLService:
     def _parse_rest_response(self, response, service_type):
         """Parsea la respuesta JSON de la API REST de DHL"""
         try:
-            if response.status_code == 200:
-                data = response.json()
+            if response.status_code in [200, 201]:  # 200 = OK, 201 = Created
+                try:
+                    data = response.json()
+                except ValueError as e:
+                    logger.error(f"Invalid JSON in successful response: {str(e)}")
+                    return {
+                        "success": False,
+                        "error_type": "json_parse_error",
+                        "message": "Respuesta exitosa pero JSON inválido",
+                        "raw_response": response.text[:500]
+                    }
                 
                 if service_type == "Rate":
                     return self._parse_rest_rate_response(data)
@@ -743,6 +778,14 @@ class DHLService:
                     return self._parse_rest_tracking_response(data)
                 elif service_type == "ePOD":
                     return self._parse_rest_epod_response(data)
+                elif service_type == "Shipment":
+                    # Para shipments exitosos, extraer el tracking number
+                    return {
+                        "success": True,
+                        "tracking_number": data.get('shipmentTrackingNumber', ''),
+                        "shipment_data": data,
+                        "message": "Envío creado exitosamente"
+                    }
                 else:
                     return {
                         "success": True,
@@ -756,6 +799,43 @@ class DHLService:
                     error_data = response.json()
                     error_message = error_data.get('detail', error_data.get('message', 'Error desconocido'))
                     
+                    # Manejo específico para tracking 404 - No data found
+                    if response.status_code == 404 and service_type == "Tracking":
+                        return {
+                            "success": False,
+                            "tracking_info": {},
+                            "events": [],
+                            "piece_details": [],
+                            "total_events": 0,
+                            "total_pieces": 0,
+                            "message": "Error DHL API: No data found",
+                            "error_code": "404",
+                            "suggestion": "Reintentar más tarde",
+                            "raw_response": response.text[:500]
+                        }
+                    
+                    # Manejo específico para errores 422 (Validation Error)
+                    if response.status_code == 422:
+                        additional_details = error_data.get('additionalDetails', [])
+                        if additional_details:
+                            # Mejorar los mensajes de error para que sean más comprensibles
+                            friendly_messages = []
+                            for detail in additional_details:
+                                if 'pickup' in detail and 'isRequested' in detail:
+                                    friendly_messages.append("Configuración de pickup inválida")
+                                elif 'pickup' in detail and 'accountNumber' in detail:
+                                    friendly_messages.append("Número de cuenta en pickup no permitido")
+                                elif 'pickup' in detail and 'typeCode' in detail:
+                                    friendly_messages.append("Tipo de pickup inválido")
+                                elif 'quantity/value' in detail and 'not greater or equal to 1' in detail:
+                                    friendly_messages.append("La cantidad debe ser mayor o igual a 1")
+                                elif 'packages' in detail and 'expected minimum item count: 1' in detail:
+                                    friendly_messages.append("Debe incluir al menos un paquete")
+                                else:
+                                    friendly_messages.append(detail)
+                            
+                            error_message = f"Errores de validación: {'; '.join(friendly_messages)}"
+                    
                     return {
                         "success": False,
                         "error_code": str(response.status_code),
@@ -763,7 +843,8 @@ class DHLService:
                         "http_status": response.status_code,
                         "error_data": error_data
                     }
-                except:
+                except ValueError as json_error:
+                    logger.error(f"Invalid JSON in error response: {str(json_error)}")
                     return {
                         "success": False,
                         "error_code": str(response.status_code),
@@ -789,29 +870,93 @@ class DHLService:
                 "raw_response": response.text[:500] if response else "No response"
             }
     
+    def _extract_location_info(self, location_details):
+        """Extrae información de ubicación de diferentes formatos"""
+        try:
+            if not location_details:
+                return "Unknown"
+            
+            # Para shipperDetails/receiverDetails
+            if 'postalAddress' in location_details:
+                postal = location_details['postalAddress']
+                city = postal.get('cityName', '')
+                country = postal.get('countryCode', '')
+                service_areas = location_details.get('serviceArea', [])
+                
+                if service_areas and len(service_areas) > 0:
+                    return service_areas[0].get('description', f"{city}, {country}".strip(', '))
+                return f"{city}, {country}".strip(', ') or "Unknown"
+            
+            # Para eventos de tracking con location/address
+            elif 'address' in location_details:
+                address = location_details['address']
+                return address.get('addressLocality', 'Unknown')
+            
+            # Otros formatos
+            else:
+                return str(location_details) if location_details else "Unknown"
+                
+        except Exception as e:
+            logger.error(f"Error extracting location info: {str(e)}")
+            return "Unknown"
+    
     def _parse_rest_tracking_response(self, data):
         """Parsea la respuesta JSON de tracking de la API REST"""
         try:
+            # Validar que data sea un diccionario
+            if not isinstance(data, dict):
+                logger.error(f"Tracking response data is not a dict: {type(data)}")
+                return {
+                    "success": False,
+                    "tracking_info": {},
+                    "events": [],
+                    "piece_details": [],
+                    "total_events": 0,
+                    "total_pieces": 0,
+                    "message": "Error DHL API: Formato de respuesta inválido",
+                    "error_code": "INVALID_FORMAT",
+                    "suggestion": "Reintentar más tarde",
+                    "raw_response": str(data)[:500]
+                }
+            
             # Estructura de respuesta de tracking de DHL REST API
             shipments = data.get('shipments', [])
             if not shipments:
                 return {
                     "success": False,
-                    "message": "No se encontró información de tracking",
-                    "data": data
+                    "tracking_info": {},
+                    "events": [],
+                    "piece_details": [],
+                    "total_events": 0,
+                    "total_pieces": 0,
+                    "message": "Error DHL API: No se encontró información de tracking",
+                    "error_code": "NO_DATA",
+                    "suggestion": "Verificar número de tracking",
+                    "raw_response": str(data)[:500]
                 }
             
             # Usar el primer envío
             shipment = shipments[0]
             
+            # Manejar status como string o como objeto
+            status = shipment.get('status', 'Unknown')
+            if isinstance(status, dict):
+                status_code = status.get('statusCode', 'Unknown')
+                status_desc = status.get('description', 'Unknown')
+            else:
+                status_code = str(status)
+                status_desc = str(status)
+            
             # Información básica del envío
             shipment_info = {
-                'tracking_number': shipment.get('id', ''),
-                'status': shipment.get('status', {}).get('statusCode', 'Unknown'),
-                'status_description': shipment.get('status', {}).get('description', 'Unknown'),
-                'origin': shipment.get('origin', {}).get('address', {}).get('addressLocality', 'Unknown'),
-                'destination': shipment.get('destination', {}).get('address', {}).get('addressLocality', 'Unknown'),
-                'service': shipment.get('service', 'Unknown'),
+                'tracking_number': shipment.get('shipmentTrackingNumber', shipment.get('id', '')),
+                'status': status_code,
+                'status_description': status_desc,
+                'service': shipment.get('productCode', shipment.get('service', 'Unknown')),
+                'description': shipment.get('description', 'Unknown'),
+                'shipment_timestamp': shipment.get('shipmentTimestamp', ''),
+                'origin': self._extract_location_info(shipment.get('shipperDetails', {})),
+                'destination': self._extract_location_info(shipment.get('receiverDetails', {})),
                 'total_weight': shipment.get('details', {}).get('totalWeight', {}).get('value', 0),
                 'weight_unit': shipment.get('details', {}).get('totalWeight', {}).get('unitText', 'kg'),
                 'number_of_pieces': shipment.get('details', {}).get('numberOfPieces', 0)
@@ -823,7 +968,7 @@ class DHLService:
             for event in tracking_events:
                 event_data = {
                     'timestamp': event.get('timestamp', ''),
-                    'location': event.get('location', {}).get('address', {}).get('addressLocality', 'Unknown'),
+                    'location': self._extract_location_info(event.get('location', {})),
                     'status': event.get('description', 'Unknown'),
                     'next_steps': event.get('nextSteps', '')
                 }
@@ -844,12 +989,40 @@ class DHLService:
             
             return {
                 "success": True,
-                "tracking_info": shipment_info,
-                "events": events,
+                "tracking_number": shipment_info['tracking_number'],
+                "status": shipment_info['status_description'],
+                "shipment_info": {
+                    "tracking_number": shipment_info['tracking_number'],
+                    "status": shipment_info['status'],
+                    "status_description": shipment_info['status_description'],
+                    "origin": shipment_info['origin'],
+                    "destination": shipment_info['destination'],
+                    "service_type": shipment_info['service'],
+                    "description": shipment_info['description'],
+                    "shipment_timestamp": shipment_info['shipment_timestamp'],
+                    "estimated_delivery": shipment_info.get('estimated_delivery', 'No disponible'),
+                    "total_weight": shipment_info['total_weight'],
+                    "weight_unit": shipment_info['weight_unit'],
+                    "number_of_pieces": shipment_info['number_of_pieces']
+                },
+                "events": [
+                    {
+                        "description": event['status'],
+                        "date": event['timestamp'].split('T')[0] if 'T' in event['timestamp'] else event['timestamp'],
+                        "time": event['timestamp'].split('T')[1] if 'T' in event['timestamp'] else '',
+                        "location": event['location'],
+                        "additional_info": event.get('next_steps', '')
+                    } for event in events
+                ],
                 "piece_details": pieces,
                 "total_events": len(events),
                 "total_pieces": len(pieces),
                 "message": f"Tracking encontrado: {len(events)} eventos, {len(pieces)} piezas",
+                "additional_info": {
+                    "product_code": shipment_info['service'],
+                    "description": shipment_info['description'],
+                    "timestamp": shipment_info['shipment_timestamp']
+                },
                 "raw_data": data
             }
             
@@ -857,9 +1030,15 @@ class DHLService:
             logger.error(f"Error parsing REST tracking response: {str(e)}")
             return {
                 "success": False,
-                "error_type": "parse_error",
+                "tracking_info": {},
+                "events": [],
+                "piece_details": [],
+                "total_events": 0,
+                "total_pieces": 0,
                 "message": f"Error procesando respuesta de tracking: {str(e)}",
-                "raw_data": data
+                "error_code": "PARSE_ERROR",
+                "suggestion": "Reintentar más tarde",
+                "raw_response": str(data)[:500] if data else "No data"
             }
 
     def _parse_rest_rate_response(self, data):
@@ -1164,527 +1343,3 @@ class DHLService:
             }
         
         return service_compatibility[service_code]
-
-    def compare_content_types(self, origin, destination, weight, dimensions, declared_weight=None, account_number=None):
-        """
-        Compara tarifas entre DOCUMENTS y NON_DOCUMENTS para mostrar diferencias al cliente
-        
-        Args:
-            origin: Información del origen
-            destination: Información del destino
-            weight: Peso del paquete
-            dimensions: Dimensiones del paquete
-            declared_weight: Peso declarado (opcional)
-            account_number: Número de cuenta DHL (opcional)
-            
-        Returns:
-            dict: Comparación detallada entre ambos tipos de contenido
-        """
-        try:
-            logger.info("=== INICIANDO COMPARACIÓN DE TIPOS DE CONTENIDO ===")
-            
-            # Obtener cotizaciones para NON_DOCUMENTS (paquetes)
-            logger.info("Obteniendo tarifas para NON_DOCUMENTS (paquetes)...")
-            packages_result = self.get_rate(
-                origin=origin,
-                destination=destination,
-                weight=weight,
-                dimensions=dimensions,
-                declared_weight=declared_weight,
-                content_type="P",
-                account_number=account_number
-            )
-            
-            # Obtener cotizaciones para DOCUMENTS (documentos)
-            logger.info("Obteniendo tarifas para DOCUMENTS (documentos)...")
-            documents_result = self.get_rate(
-                origin=origin,
-                destination=destination,
-                weight=weight,
-                dimensions=dimensions,
-                declared_weight=declared_weight,
-                content_type="D",
-                account_number=account_number
-            )
-            
-            # Preparar respuesta comparativa
-            comparison_result = {
-                "success": True,
-                "comparison_type": "DOCUMENTS vs NON_DOCUMENTS",
-                "packages_rates": packages_result if packages_result.get('success') else None,
-                "documents_rates": documents_result if documents_result.get('success') else None,
-                "summary": {},
-                "recommendations": [],
-                "important_differences": []
-            }
-            
-            # Analizar diferencias si ambas consultas fueron exitosas
-            if packages_result.get('success') and documents_result.get('success'):
-                comparison_result["summary"] = self._analyze_rate_differences(
-                    packages_result.get('rates', []),
-                    documents_result.get('rates', [])
-                )
-                
-                comparison_result["recommendations"] = self._generate_recommendations(
-                    packages_result.get('rates', []),
-                    documents_result.get('rates', [])
-                )
-                
-                comparison_result["important_differences"] = self._highlight_important_differences(
-                    packages_result,
-                    documents_result
-                )
-            
-            # Agregar información sobre aduanas y restricciones
-            comparison_result["customs_info"] = {
-                "documents": {
-                    "customs_declarable": False,
-                    "description": "Los documentos generalmente no requieren declaración aduanera",
-                    "restrictions": "Solo documentos comerciales, cartas, facturas, etc.",
-                    "advantages": ["Proceso más rápido", "Menos documentación", "Generalmente más económico"]
-                },
-                "packages": {
-                    "customs_declarable": True,
-                    "description": "Los paquetes requieren declaración aduanera detallada",
-                    "restrictions": "Productos físicos, mercancías, muestras, etc.",
-                    "advantages": ["Permite envío de cualquier producto", "Más opciones de servicio", "Mejor protección"]
-                }
-            }
-            
-            return comparison_result
-            
-        except Exception as e:
-            logger.error(f"Error en compare_content_types: {str(e)}")
-            return {
-                "success": False,
-                "error_type": "comparison_error",
-                "message": f"Error comparando tipos de contenido: {str(e)}"
-            }
-    
-    def _analyze_rate_differences(self, packages_rates, documents_rates):
-        """Analiza las diferencias entre tarifas de paquetes y documentos"""
-        summary = {
-            "packages_count": len(packages_rates),
-            "documents_count": len(documents_rates),
-            "price_differences": [],
-            "service_availability": {},
-            "cheapest_option": None,
-            "fastest_option": None
-        }
-        
-        # Crear mapas por código de servicio para comparación
-        packages_map = {rate['service_code']: rate for rate in packages_rates}
-        documents_map = {rate['service_code']: rate for rate in documents_rates}
-        
-        # Analizar servicios disponibles en ambos tipos
-        all_services = set(packages_map.keys()) | set(documents_map.keys())
-        
-        for service_code in all_services:
-            package_rate = packages_map.get(service_code)
-            document_rate = documents_map.get(service_code)
-            
-            service_info = {
-                "service_code": service_code,
-                "service_name": package_rate['service_name'] if package_rate else document_rate['service_name'],
-                "available_for_packages": package_rate is not None,
-                "available_for_documents": document_rate is not None,
-                "package_price": package_rate['total_charge'] if package_rate else None,
-                "document_price": document_rate['total_charge'] if document_rate else None,
-                "price_difference": None,
-                "percentage_difference": None
-            }
-            
-            # Calcular diferencia de precio si ambos están disponibles
-            if package_rate and document_rate:
-                price_diff = package_rate['total_charge'] - document_rate['total_charge']
-                service_info["price_difference"] = price_diff
-                
-                if document_rate['total_charge'] > 0:
-                    percentage_diff = (price_diff / document_rate['total_charge']) * 100
-                    service_info["percentage_difference"] = round(percentage_diff, 2)
-            
-            summary["price_differences"].append(service_info)
-            summary["service_availability"][service_code] = service_info
-        
-        # Encontrar la opción más económica general
-        all_rates = packages_rates + documents_rates
-        if all_rates:
-            cheapest = min(all_rates, key=lambda x: x['total_charge'])
-            summary["cheapest_option"] = {
-                "service_name": cheapest['service_name'],
-                "service_code": cheapest['service_code'],
-                "price": cheapest['total_charge'],
-                "currency": cheapest['currency'],
-                "type": "package" if cheapest in packages_rates else "document"
-            }
-        
-        return summary
-    
-    def _generate_recommendations(self, packages_rates, documents_rates):
-        """Genera recomendaciones basadas en la comparación de tarifas"""
-        recommendations = []
-        
-        # Encontrar la opción más económica
-        all_rates = packages_rates + documents_rates
-        if all_rates:
-            cheapest = min(all_rates, key=lambda x: x['total_charge'])
-            content_type = "documentos" if cheapest in documents_rates else "paquetes"
-            
-            recommendations.append({
-                "type": "cost_saving",
-                "title": "Opción más económica",
-                "description": f"El servicio {cheapest['service_name']} para {content_type} es la opción más barata",
-                "details": {
-                    "service": cheapest['service_name'],
-                    "price": cheapest['total_charge'],
-                    "currency": cheapest['currency'],
-                    "content_type": content_type
-                }
-            })
-        
-        # Comparar servicios disponibles en ambos tipos
-        packages_map = {rate['service_code']: rate for rate in packages_rates}
-        documents_map = {rate['service_code']: rate for rate in documents_rates}
-        
-        # Buscar servicios con gran diferencia de precio
-        for code in set(packages_map.keys()) & set(documents_map.keys()):
-            package_rate = packages_map[code]
-            document_rate = documents_map[code]
-            
-            price_diff = abs(package_rate['total_charge'] - document_rate['total_charge'])
-            percentage_diff = (price_diff / min(package_rate['total_charge'], document_rate['total_charge'])) * 100
-            
-            if percentage_diff > 20:  # Diferencia significativa
-                cheaper_type = "documentos" if document_rate['total_charge'] < package_rate['total_charge'] else "paquetes"
-                savings = abs(package_rate['total_charge'] - document_rate['total_charge'])
-                
-                recommendations.append({
-                    "type": "significant_difference",
-                    "title": f"Diferencia significativa en {package_rate['service_name']}",
-                    "description": f"Clasificar como {cheaper_type} puede ahorrar ${savings:.2f}",
-                    "details": {
-                        "service": package_rate['service_name'],
-                        "savings": savings,
-                        "percentage": round(percentage_diff, 1),
-                        "recommended_type": cheaper_type
-                    }
-                })
-        
-        # Recomendación sobre servicios exclusivos
-        package_only = set(packages_map.keys()) - set(documents_map.keys())
-        document_only = set(documents_map.keys()) - set(packages_map.keys())
-        
-        if package_only:
-            services = [packages_map[code]['service_name'] for code in package_only]
-            recommendations.append({
-                "type": "exclusive_service",
-                "title": "Servicios solo para paquetes",
-                "description": f"Los servicios {', '.join(services)} solo están disponibles para paquetes",
-                "details": {
-                    "services": services,
-                    "restriction": "Solo disponible para envíos de mercancías/productos"
-                }
-            })
-        
-        if document_only:
-            services = [documents_map[code]['service_name'] for code in document_only]
-            recommendations.append({
-                "type": "exclusive_service",
-                "title": "Servicios solo para documentos",
-                "description": f"Los servicios {', '.join(services)} solo están disponibles para documentos",
-                "details": {
-                    "services": services,
-                    "restriction": "Solo disponible para envíos de documentos"
-                }
-            })
-        
-        return recommendations
-    
-    def _highlight_important_differences(self, packages_result, documents_result):
-        """Resalta las diferencias importantes entre envíos de paquetes y documentos"""
-        differences = []
-        
-        # Diferencia en declaración aduanera
-        differences.append({
-            "category": "customs",
-            "title": "Declaración Aduanera",
-            "packages": "Requiere declaración aduanera detallada con valor, descripción y clasificación",
-            "documents": "Generalmente exento de declaración aduanera o proceso simplificado",
-            "impact": "Los documentos suelen tener procesamiento más rápido en aduana"
-        })
-        
-        # Diferencia en restricciones de contenido
-        differences.append({
-            "category": "content_restrictions",
-            "title": "Restricciones de Contenido",
-            "packages": "Permite productos físicos, mercancías, muestras, regalos, etc.",
-            "documents": "Solo documentos comerciales, cartas, facturas, contratos, planos, etc.",
-            "impact": "La clasificación incorrecta puede causar retrasos o multas"
-        })
-        
-        # Diferencia en procesamiento
-        differences.append({
-            "category": "processing",
-            "title": "Tiempo de Procesamiento",
-            "packages": "Puede requerir inspección física y documentación adicional",
-            "documents": "Procesamiento generalmente más rápido con menos inspecciones",
-            "impact": "Los documentos suelen llegar 1-2 días antes en rutas internacionales"
-        })
-        
-        # Comparar número de servicios disponibles
-        pkg_count = len(packages_result.get('rates', []))
-        doc_count = len(documents_result.get('rates', []))
-        
-        differences.append({
-            "category": "service_availability",
-            "title": "Disponibilidad de Servicios",
-            "packages": f"{pkg_count} servicios disponibles",
-            "documents": f"{doc_count} servicios disponibles",
-            "impact": "Los paquetes suelen tener más opciones de servicio premium"
-        })
-        
-        return differences
-
-    def get_service_content_compatibility(self, service_code):
-        """
-        Verifica qué tipos de contenido son compatibles con un servicio específico
-        
-        Args:
-            service_code (str): Código del servicio DHL
-            
-        Returns:
-            dict: Información de compatibilidad
-        """
-        # Servicios que solo manejan documentos
-        document_only_services = ['D']
-        
-        # Servicios que manejan paquetes (NON_DOCUMENTS)
-        package_services = ['P', 'U', 'K', 'L', 'G', 'W', 'I', 'N', 'O']
-        
-        if service_code in document_only_services:
-            return {
-                'service_code': service_code,
-                'supported_content_types': ['D'],
-                'default_content_type': 'D',
-                'restrictions': 'Solo documentos'
-            }
-        elif service_code in package_services:
-            return {
-                'service_code': service_code,
-                'supported_content_types': ['P', 'D'],
-                'default_content_type': 'P',
-                'restrictions': 'Paquetes y documentos'
-            }
-        else:
-            return {
-                'service_code': service_code,
-                'supported_content_types': ['P'],
-                'default_content_type': 'P',
-                'restrictions': 'Servicio desconocido, asumiendo paquetes'
-            }
-    
-    def get_content_type_comparison(self):
-        """
-        Obtiene una comparación detallada entre tipos de contenido DHL
-        
-        Returns:
-            dict: Comparación entre DOCUMENTS y NON_DOCUMENTS
-        """
-        return {
-            'comparison': {
-                'DOCUMENTS': {
-                    'code': 'D',
-                    'xml_value': 'DOCUMENTS',
-                    'description': 'Solo documentos sin valor comercial',
-                    'characteristics': [
-                        'Peso máximo típico: 2 kg',
-                        'Sin declaración de valor comercial',
-                        'Proceso de aduana simplificado',
-                        'Tarifas generalmente más bajas',
-                        'Tiempos de tránsito más rápidos'
-                    ],
-                    'restrictions': [
-                        'No puede contener productos físicos',
-                        'No puede tener valor comercial',
-                        'Limitaciones de peso y tamaño'
-                    ],
-                    'examples': [
-                        'Contratos',
-                        'Facturas',
-                        'Certificados',
-                        'Correspondencia',
-                        'Documentos legales'
-                    ]
-                },
-                'NON_DOCUMENTS': {
-                    'code': 'P',
-                    'xml_value': 'NON_DOCUMENTS',
-                    'description': 'Paquetes con productos físicos',
-                    'characteristics': [
-                        'Productos con valor comercial',
-                        'Requiere declaración de valor',
-                        'Proceso de aduana completo',
-                        'Sujeto a aranceles e impuestos',
-                        'Mayor flexibilidad en peso y tamaño'
-                    ],
-                    'restrictions': [
-                        'Productos prohibidos por país',
-                        'Restricciones de materiales peligrosos',
-                        'Requisitos de empaque especiales'
-                    ],
-                    'examples': [
-                        'Productos manufacturados',
-                        'Muestras comerciales',
-                        'Repuestos',
-                        'Regalos',
-                        'Mercancía general'
-                    ]
-                }
-            },
-            'response_differences': {
-                'DOCUMENTS': {
-                    'typical_services': ['D'],
-                    'pricing_factors': ['Peso', 'Destino', 'Urgencia'],
-                    'customs_processing': 'Simplificado',
-                    'transit_time': 'Más rápido'
-                },
-                'NON_DOCUMENTS': {
-                    'typical_services': ['P', 'U', 'K', 'L', 'G', 'W', 'I', 'N', 'O'],
-                    'pricing_factors': ['Peso', 'Destino', 'Urgencia', 'Valor declarado', 'Peso dimensional'],
-                    'customs_processing': 'Completo',
-                    'transit_time': 'Estándar'
-                }
-            },
-            'api_response_differences': {
-                'rate_calculation': {
-                    'DOCUMENTS': 'Basado principalmente en peso y destino',
-                    'NON_DOCUMENTS': 'Incluye peso dimensional y valor declarado'
-                },
-                'available_services': {
-                    'DOCUMENTS': 'Limitado a servicios de documentos',
-                    'NON_DOCUMENTS': 'Acceso a todos los servicios DHL'
-                },
-                'additional_charges': {
-                    'DOCUMENTS': 'Menos cargos adicionales',
-                    'NON_DOCUMENTS': 'Puede incluir cargos por valor, combustible, zona remota'
-                }
-            }
-        }
-
-    def validate_content_type_for_service(self, service_code, content_type):
-        """
-        Valida si un tipo de contenido es compatible con un servicio específico
-        
-        Args:
-            service_code (str): Código del servicio DHL
-            content_type (str): Tipo de contenido ('P' o 'D')
-            
-        Returns:
-            dict: Resultado de la validación
-        """
-        compatibility = self.get_service_content_compatibility(service_code)
-        
-        if content_type in compatibility['supported_content_types']:
-            return {
-                'valid': True,
-                'service_code': service_code,
-                'content_type': content_type,
-                'message': f"Tipo de contenido {content_type} es compatible con servicio {service_code}"
-            }
-        else:
-            return {
-                'valid': False,
-                'service_code': service_code,
-                'content_type': content_type,
-                'message': f"Tipo de contenido {content_type} NO es compatible con servicio {service_code}",
-                'supported_types': compatibility['supported_content_types'],
-                'suggestion': f"Use tipo de contenido {compatibility['default_content_type']} para este servicio"
-            }
-    
-    def suggest_content_type(self, shipment_description, shipment_value=None, weight=None):
-        """
-        Sugiere el tipo de contenido basado en la descripción y características del envío
-        
-        Args:
-            shipment_description (str): Descripción del contenido del envío
-            shipment_value (float): Valor declarado del envío (opcional)
-            weight (float): Peso del envío en kg (opcional)
-            
-        Returns:
-            dict: Sugerencia de tipo de contenido
-        """
-        description_lower = shipment_description.lower() if shipment_description else ""
-        
-        # Palabras clave que indican documentos
-        document_keywords = [
-            'documento', 'document', 'contract', 'contrato', 'invoice', 'factura',
-            'certificate', 'certificado', 'letter', 'carta', 'correspondence',
-            'correspondencia', 'legal', 'paper', 'papel', 'form', 'formulario',
-            'statement', 'declaración', 'report', 'reporte', 'manual'
-        ]
-        
-        # Palabras clave que indican productos
-        product_keywords = [
-            'product', 'producto', 'merchandise', 'mercancía', 'goods', 'bienes',
-            'sample', 'muestra', 'part', 'repuesto', 'component', 'componente',
-            'equipment', 'equipo', 'device', 'dispositivo', 'tool', 'herramienta',
-            'gift', 'regalo', 'clothing', 'ropa', 'electronics', 'electrónicos'
-        ]
-        
-        # Verificar palabras clave
-        has_document_keywords = any(keyword in description_lower for keyword in document_keywords)
-        has_product_keywords = any(keyword in description_lower for keyword in product_keywords)
-        
-        # Factores que sugieren NON_DOCUMENTS
-        suggests_non_documents = False
-        reasons = []
-        
-        if shipment_value and shipment_value > 0:
-            suggests_non_documents = True
-            reasons.append(f"Valor declarado: ${shipment_value}")
-        
-        if weight and weight > 2:
-            suggests_non_documents = True
-            reasons.append(f"Peso: {weight} kg (típico para paquetes)")
-        
-        if has_product_keywords:
-            suggests_non_documents = True
-            reasons.append("Descripción indica productos físicos")
-        
-        # Determinar sugerencia
-        if has_document_keywords and not suggests_non_documents:
-            suggested_type = 'D'
-            confidence = 'high'
-            reasoning = "Descripción indica documentos sin valor comercial"
-        elif suggests_non_documents:
-            suggested_type = 'P'
-            confidence = 'high' if len(reasons) > 1 else 'medium'
-            reasoning = f"Factores que indican productos: {', '.join(reasons)}"
-        else:
-            suggested_type = 'P'  # Default seguro
-            confidence = 'low'
-            reasoning = "No hay indicadores claros, usando NON_DOCUMENTS por seguridad"
-        
-        return {
-            'suggested_type': suggested_type,
-            'suggested_xml': 'DOCUMENTS' if suggested_type == 'D' else 'NON_DOCUMENTS',
-            'confidence': confidence,
-            'reasoning': reasoning,
-            'factors_analyzed': {
-                'description': shipment_description,
-                'value': shipment_value,
-                'weight': weight,
-                'has_document_keywords': has_document_keywords,
-                'has_product_keywords': has_product_keywords
-            },
-            'alternatives': {
-                'D': {
-                    'suitable_if': 'Solo documentos sin valor comercial',
-                    'restrictions': 'Peso máximo ~2kg, sin valor comercial'
-                },
-                'P': {
-                    'suitable_if': 'Cualquier producto físico con valor',
-                    'restrictions': 'Requiere declaración de valor y proceso aduanero'
-                }
-            }
-        }

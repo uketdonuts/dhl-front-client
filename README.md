@@ -109,15 +109,6 @@ python-docker.bat -c "import django; print(django.VERSION)"
 python-docker.bat -m pip list
 ```
 
-#### Tests
-```bash
-# Ejecutar todos los tests
-test-docker.bat
-
-# Ejecutar tests específicos
-test-docker.bat dhl_api.tests.test_views
-```
-
 #### Gestión de dependencias
 ```bash
 # Instalar paquetes

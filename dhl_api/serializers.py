@@ -75,6 +75,7 @@ class TrackingRequestSerializer(serializers.Serializer):
 class EPODRequestSerializer(serializers.Serializer):
     """Serializer para requests de ePOD"""
     shipment_id = serializers.CharField(max_length=50)
+    account_number = serializers.CharField(max_length=20, required=False, allow_blank=True)
 
 
 class ShipmentRequestSerializer(serializers.Serializer):
