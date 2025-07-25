@@ -15,8 +15,9 @@ setuptools==69.5.1
 # Base de datos - PostgreSQL comentado para Render Free Tier
 # psycopg2-binary==2.9.7  # Usar SQLite en lugar de PostgreSQL
 
-# XML parsing y manejo de datos (necesario para DHL API)
-lxml==4.9.3
+# XML parsing compatible con Python 3.13
+# lxml==4.9.3  # Comentado: incompatible con Python 3.13
+# Alternativa: usar xml.etree (built-in) o BeautifulSoup para parsing
 
 # Servidor de producción
 gunicorn==21.2.0
@@ -28,6 +29,10 @@ pytz==2023.3
 
 # Parsing JSON y datos
 simplejson==3.19.2
+
+# XML parsing alternativo compatible con Python 3.13
+beautifulsoup4==4.12.2
+html5lib==1.1
 
 # Seguridad
 django-ratelimit==4.1.0
