@@ -11,7 +11,6 @@ dj-database-url==2.1.0
 
 # Compatibilidad Python 3.13 - CRÍTICO para Render
 setuptools==69.5.1
-pkg-resources==0.0.0
 
 # Base de datos - PostgreSQL comentado para Render Free Tier
 # psycopg2-binary==2.9.7  # Usar SQLite en lugar de PostgreSQL
