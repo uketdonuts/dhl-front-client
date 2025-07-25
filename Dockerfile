@@ -1,39 +1,29 @@
-# Usar imagen oficial de Python
+# Usar imagen más ligera
 FROM python:3.11-slim
 
-# Establecer variables de entorno
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 ENV DJANGO_SETTINGS_MODULE=dhl_project.settings
 
-# Establecer directorio de trabajo
 WORKDIR /app
 
-# Instalar dependencias del sistema
+# Solo instalar dependencias esenciales (sin PostgreSQL para SQLite)
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        postgresql-client \
-        build-essential \
-        libpq-dev \
+        gcc \
     && rm -rf /var/lib/apt/lists/*
 
-# Copiar requirements e instalar dependencias Python
+# Copiar e instalar requirements
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copiar código del proyecto
+# Copiar código
 COPY . .
 
 # Crear directorio para logs
 RUN mkdir -p logs
 
-# Crear usuario no-root
-RUN adduser --disabled-password --gecos '' django
-RUN chown -R django:django /app
-USER django
-
-# Exponer puerto
 EXPOSE 8000
 
-# Comando para ejecutar la aplicación
-CMD ["gunicorn", "-c", "gunicorn.conf.py", "dhl_project.wsgi:application"] 
+# Comando optimizado para Render
+CMD python manage.py migrate && gunicorn --bind 0.0.0.0:$PORT --workers 1 --timeout 120 dhl_project.wsgi:application
