@@ -174,12 +174,16 @@ SIMPLE_JWT = {
 
 # CORS settings
 if DEBUG:
+    # En desarrollo, permitir todo
     CORS_ALLOW_ALL_ORIGINS = True
 else:
-    CORS_ALLOW_ALL_ORIGINS = True
+    # En producción, especificar tu frontend
+    CORS_ALLOWED_ORIGINS = [
+        "https://dhl-frontend.onrender.com",
+    ]
+    CORS_ALLOW_ALL_ORIGINS = False
 
 CORS_ALLOW_CREDENTIALS = True
-
 # DHL Configuration
 DHL_USERNAME = config('DHL_USERNAME', default='apO3fS5mJ8zT7h')
 DHL_PASSWORD = config('DHL_PASSWORD', default='J^4oF@1qW!0qS!5b')
