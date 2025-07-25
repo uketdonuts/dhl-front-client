@@ -1,44 +1,29 @@
-# Dockerfile optimizado para Render Free Tier
+# Usar imagen más ligera
 FROM python:3.11-slim
 
-# Variables de entorno para optimización
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 ENV DJANGO_SETTINGS_MODULE=dhl_project.settings
-ENV PORT=10000
 
-# Directorio de trabajo
 WORKDIR /app
 
-# Instalar solo dependencias esenciales (sin PostgreSQL para usar SQLite)
+# Solo instalar dependencias esenciales (sin PostgreSQL para SQLite)
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         gcc \
-        libc6-dev \
-    && rm -rf /var/lib/apt/lists/* \
-    && apt-get clean
+    && rm -rf /var/lib/apt/lists/*
 
-# Copiar requirements e instalar Python packages
+# Copiar e instalar requirements
 COPY requirements.txt .
-RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir -r requirements.txt \
-    && pip cache purge
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Copiar código del proyecto
+# Copiar código
 COPY . .
 
-# Crear directorios necesarios
-RUN mkdir -p logs media staticfiles
+# Crear directorio para logs
+RUN mkdir -p logs
 
-# Crear usuario no-root para seguridad
-RUN adduser --disabled-password --gecos '' --shell /bin/bash django \
-    && chown -R django:django /app
+EXPOSE 8000
 
-# Cambiar a usuario no-root
-USER django
-
-# Exponer puerto dinámico de Render
-EXPOSE $PORT
-
-# Comando optimizado para Render Free Tier
-CMD gunicorn --bind 0.0.0.0:$PORT --workers 1 --timeout 60 --max-requests 200 --worker-class sync --preload dhl_project.wsgi:application
+# Comando optimizado para Render
+CMD python manage.py migrate && gunicorn --bind 0.0.0.0:$PORT --workers 1 --timeout 120 dhl_project.wsgi:application
