@@ -133,9 +133,42 @@ docker-dev.bat db-shell
 docker-dev.bat reset-db
 ```
 
+## 🚀 Despliegue a GitHub Pages
+
+### Opción 1: Deploy automático con GitHub Actions (Recomendado)
+
+1. **Habilitar GitHub Pages en tu repositorio:**
+   - Ve a Settings > Pages en GitHub
+   - Selecciona "GitHub Actions" como source
+
+2. **Push del código al repositorio:**
+   ```bash
+   git add .
+   git commit -m "Setup GitHub Pages deployment"
+   git push origin main
+   ```
+
+3. **El deploy se ejecutará automáticamente** cuando hagas push a la rama main.
+
+### Opción 2: Build local con Docker Compose
+
+Para construir la aplicación para GitHub Pages localmente:
+
+```bash
+# Build usando Docker Compose
+docker compose --profile github-pages up --build github-pages-build
+
+# O usar el script conveniente
+./build-github-pages.sh        # Linux/Mac
+build-github-pages.bat         # Windows
+```
+
+Los archivos estáticos se generarán en `./github-pages-build/` y estarán listos para ser desplegados.
+
 ### URLs del proyecto
 - **Backend Django**: http://localhost:8001
 - **Frontend React**: http://localhost:3002
+- **GitHub Pages Demo**: https://uketdonuts.github.io/dhl-front-client/
 - **PostgreSQL**: localhost:5433
 - **Admin Django**: http://localhost:8001/admin
 

@@ -84,6 +84,31 @@ services:
       - dhl-network
     restart: unless-stopped
 
+  # GitHub Pages Build Service
+  github-pages-build:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.pages
+    container_name: dhl-github-pages-builder
+    environment:
+      - CI=false
+      - REACT_APP_ENVIRONMENT=production
+      - REACT_APP_API_URL=""
+      - REACT_APP_BACKEND_URL=""
+      - GENERATE_SOURCEMAP=false
+    volumes:
+      - ./frontend:/app
+      - ./github-pages-build:/app/build
+      - /app/node_modules
+    networks:
+      - dhl-network
+    command: >
+      sh -c "npm pkg set homepage='/dhl-front-client' &&
+             npm run build &&
+             echo '✅ Build para GitHub Pages completado en ./github-pages-build/'"
+    profiles:
+      - github-pages
+
 networks:
   dhl-network:
     name: dhl-network

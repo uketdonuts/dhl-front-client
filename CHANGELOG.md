@@ -6,6 +6,16 @@ El formato está basado en [Keep a Changelog](https://keepachangelog.com/es/1.0.
 y este proyecto se adhiere al [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
+### Added
+- **Deploy a GitHub Pages con Docker Compose**: Implementación completa para desplegar con `docker compose up`
+  - **GitHub Action automático** para deploy a GitHub Pages en push a main
+  - **Servicio Docker** (`github-pages-build`) para build local de la aplicación estática
+  - **Modo demo estático** para GitHub Pages sin dependencia del backend Django
+  - **Scripts de build** para Windows (`build-github-pages.bat`) y Unix (`build-github-pages.sh`)
+  - **Configuración automática** del homepage para GitHub Pages (`/dhl-front-client`)
+  - **Componente GitHubPagesDemo** que muestra información del proyecto en modo estático
+  - **Detección automática** del entorno para mostrar demo o aplicación completa
+
 ### Changed
 - **MEJORA CRÍTICA - Integración Completa del Dropdown de Cuentas**: Sincronización total de la cuenta seleccionada (706091269) con todas las operaciones DHL
   - **Envíos (Shipment)**: El dropdown ahora influye en la creación de envíos, incluyendo `account_number` en `shipmentData`

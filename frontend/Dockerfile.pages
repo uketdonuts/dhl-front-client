@@ -1,0 +1,16 @@
+# Dockerfile especial para build de GitHub Pages
+FROM node:18-alpine
+
+WORKDIR /app
+
+# Copiar package files
+COPY package*.json ./
+
+# Instalar dependencias
+RUN npm ci --only=production --silent
+
+# Copiar código fuente
+COPY . .
+
+# El comando de build se ejecutará desde docker-compose
+CMD ["npm", "run", "build"]
