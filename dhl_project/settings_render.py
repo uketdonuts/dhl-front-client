@@ -1,10 +1,8 @@
 """
-Django settings optimizados para Render Free Tier
-Configuración ultra-liviana para 500MB RAM y 0.1 CPU
+Settings simplificados para Render Free Tier
 """
 
 import os
-import dj_database_url
 from pathlib import Path
 
 # Build paths
@@ -19,11 +17,11 @@ ALLOWED_HOSTS = [
     'localhost',
     '127.0.0.1',
     '0.0.0.0',
-    '.onrender.com',  # Dominios de Render
+    '.onrender.com',
     os.getenv('RENDER_EXTERNAL_HOSTNAME', '')
 ]
 
-# Apps mínimas necesarias
+# Apps mínimas
 INSTALLED_APPS = [
     'django.contrib.admin',
     'django.contrib.auth',
@@ -31,13 +29,9 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    
-    # Third party - solo lo esencial
     'rest_framework',
     'rest_framework_simplejwt',
     'corsheaders',
-    
-    # Local app
     'dhl_api',
 ]
 
@@ -56,7 +50,7 @@ MIDDLEWARE = [
 
 ROOT_URLCONF = 'dhl_project.urls'
 
-# Templates optimizados
+# Templates básicos
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
@@ -75,16 +69,15 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'dhl_project.wsgi.application'
 
-# Base de datos - SQLite para ahorrar memoria
+# Base de datos SQLite simple
 DATABASES = {
-    'default': dj_database_url.config(
-        default=f'sqlite:///{BASE_DIR}/db.sqlite3',
-        conn_max_age=600,
-        conn_health_checks=True,
-    )
+    'default': {
+        'ENGINE': 'django.db.backends.sqlite3',
+        'NAME': BASE_DIR / 'db.sqlite3',
+    }
 }
 
-# Password validation - mínima
+# Password validation mínima
 AUTH_PASSWORD_VALIDATORS = [
     {'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator'},
     {'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator'},
@@ -96,7 +89,7 @@ TIME_ZONE = 'America/Mexico_City'
 USE_I18N = True
 USE_TZ = True
 
-# Archivos estáticos optimizados
+# Archivos estáticos
 STATIC_URL = '/static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
 STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
@@ -108,7 +101,7 @@ MEDIA_ROOT = BASE_DIR / 'media'
 # Default primary key
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-# Django REST Framework - configuración mínima
+# Django REST Framework básico
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
         'rest_framework_simplejwt.authentication.JWTAuthentication',
@@ -117,20 +110,20 @@ REST_FRAMEWORK = {
         'rest_framework.permissions.IsAuthenticated',
     ],
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
-    'PAGE_SIZE': 20,  # Reducido para ahorrar memoria
+    'PAGE_SIZE': 20,
 }
 
-# JWT Settings - optimizados
+# JWT Settings simples
 from datetime import timedelta
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(hours=1),
     'REFRESH_TOKEN_LIFETIME': timedelta(days=1),
-    'ROTATE_REFRESH_TOKENS': False,  # Deshabilitado para ahorrar memoria
+    'ROTATE_REFRESH_TOKENS': False,
 }
 
-# CORS - optimizado para producción
+# CORS simple
 CORS_ALLOWED_ORIGINS = os.getenv('CORS_ALLOWED_ORIGINS', '*').split(',')
-CORS_ALLOW_ALL_ORIGINS = True  # Para desarrollo, cambiar en producción
+CORS_ALLOW_ALL_ORIGINS = True
 
 # DHL API Settings
 DHL_USERNAME = os.getenv('DHL_USERNAME')
@@ -138,7 +131,7 @@ DHL_PASSWORD = os.getenv('DHL_PASSWORD')
 DHL_BASE_URL = os.getenv('DHL_BASE_URL', 'https://express.api.dhl.com')
 DHL_ENVIRONMENT = os.getenv('DHL_ENVIRONMENT', 'production')
 
-# Logging optimizado - solo errores críticos
+# Logging mínimo
 LOGGING = {
     'version': 1,
     'disable_existing_loggers': False,
@@ -149,27 +142,19 @@ LOGGING = {
     },
     'root': {
         'handlers': ['console'],
-        'level': 'WARNING',  # Solo warnings y errores
+        'level': 'WARNING',
     },
 }
 
-# Cache deshabilitado para ahorrar memoria
+# Cache deshabilitado
 CACHES = {
     'default': {
         'BACKEND': 'django.core.cache.backends.dummy.DummyCache',
     }
 }
 
-# Sessions optimizadas
-SESSION_ENGINE = 'django.contrib.sessions.backends.db'
-SESSION_COOKIE_AGE = 3600  # 1 hora
-SESSION_EXPIRE_AT_BROWSER_CLOSE = True
-
-# Security settings para producción
+# Security para producción
 if not DEBUG:
     SECURE_BROWSER_XSS_FILTER = True
     SECURE_CONTENT_TYPE_NOSNIFF = True
     X_FRAME_OPTIONS = 'DENY'
-    SECURE_HSTS_SECONDS = 31536000
-    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
-    SECURE_HSTS_PRELOAD = True
