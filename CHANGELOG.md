@@ -6,6 +6,33 @@ El formato está basado en [Keep a Changelog](https://keepachangelog.com/es/1.0.
 y este proyecto se adhiere al [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
+### Added
+- **🚀 Configuración para Render Free Tier**: Optimización completa para despliegue en Render gratuito (500MB RAM, 0.1 CPU)
+  - `docker-compose.yml` optimizado con límites de memoria (400MB para backend)
+  - `Dockerfile.render` específico para producción en Render
+  - `requirements.render.txt` con dependencias mínimas (sin PostgreSQL, Celery, etc.)
+  - `settings_render.py` con configuración Django ultra-optimizada
+  - `gunicorn.render.conf.py` con 1 worker y timeouts reducidos
+  - `start-render.sh` script de inicio automatizado
+  - `render.yaml` configuración de servicios (backend API + frontend estático)
+  - `RENDER_DEPLOY.md` guía completa de despliegue
+
+### Changed
+- **💾 Base de Datos**: Cambiado de PostgreSQL a SQLite para ahorrar ~200MB de memoria
+- **⚡ Servidor**: Configuración Gunicorn optimizada (1 worker, timeouts reducidos, max 200 requests)
+- **🗂️ Frontend**: Separado como sitio estático independiente para reducir consumo de memoria
+- **📝 Logging**: Reducido a nivel WARNING para conservar recursos
+- **🔧 Middleware**: Removidos componentes no esenciales para desarrollo
+
+### Removed
+- **PostgreSQL**: Comentado en docker-compose.yml para usar SQLite
+- **Múltiples workers**: Solo 1 worker de Gunicorn para conservar memoria
+- **Hot-reload**: Deshabilitado en producción para optimizar rendimiento
+- **Dependencias pesadas**: Celery, django-extensions, Faker removidos de requirements.render.txt
+
+### Security
+- **Configuración de producción**: HTTPS forzado, headers de seguridad, DEBUG=False por defecto
+
 ### Changed
 - **MEJORA CRÍTICA - Integración Completa del Dropdown de Cuentas**: Sincronización total de la cuenta seleccionada (706091269) con todas las operaciones DHL
   - **Envíos (Shipment)**: El dropdown ahora influye en la creación de envíos, incluyendo `account_number` en `shipmentData`
