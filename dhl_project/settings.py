@@ -20,8 +20,11 @@ SECRET_KEY = config('SECRET_KEY', default='django-insecure-change-me-in-producti
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = config('DEBUG', default=True, cast=bool)
 
-ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='localhost,127.0.0.1,0.0.0.0,backend,backend:8000,dhl-django-backend,dhl-django-backend:8000,172.19.0.3,172.19.0.3:8000', cast=Csv())
-
+ALLOWED_HOSTS = config(
+    'ALLOWED_HOSTS', 
+    default='localhost,127.0.0.1,0.0.0.0,dhl-frontend.onrender.com,*.onrender.com', 
+    cast=Csv()
+)
 # Application definition
 INSTALLED_APPS = [
     'django.contrib.admin',
