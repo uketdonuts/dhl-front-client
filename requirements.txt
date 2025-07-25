@@ -15,20 +15,29 @@ setuptools==69.5.1
 # Base de datos - PostgreSQL comentado para Render Free Tier
 # psycopg2-binary==2.9.7  # Usar SQLite en lugar de PostgreSQL
 
+# XML parsing y manejo de datos (necesario para DHL API)
+lxml==4.9.3
+
 # Servidor de producción
 gunicorn==21.2.0
 whitenoise==6.6.0
 
 # Utilidades
 requests==2.31.0
-# Faker==19.12.0  # Comentado para ahorrar memoria
 pytz==2023.3
+
+# Parsing JSON y datos
+simplejson==3.19.2
 
 # Seguridad
 django-ratelimit==4.1.0
 
 # Logging y monitoreo - comentado para ahorrar memoria
 # django-extensions==3.2.3
+
+# Certificados SSL y seguridad para APIs externas
+certifi==2023.7.22
+urllib3==2.0.7
 
 # Validación y serialización - comentado para ahorrar memoria  
 # marshmallow==3.20.1
