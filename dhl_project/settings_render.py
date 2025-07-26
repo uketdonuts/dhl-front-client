@@ -13,11 +13,13 @@ SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-change-me-in-production')
 DEBUG = os.getenv('DEBUG', 'False').lower() == 'true'
 
 # Hosts permitidos
-ALLOWED_HOSTS = config(
-    'ALLOWED_HOSTS', 
-    default='localhost,127.0.0.1,0.0.0.0,dhl-frontend.onrender.com,*.onrender.com', 
-    cast=Csv()
-)
+ALLOWED_HOSTS = [
+    'localhost',
+    '127.0.0.1',
+    '0.0.0.0',
+    '.onrender.com',
+    os.getenv('RENDER_EXTERNAL_HOSTNAME', '')
+]
 
 # Apps mínimas
 INSTALLED_APPS = [
