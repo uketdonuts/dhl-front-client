@@ -1,0 +1,72 @@
+version: '3.8'
+
+services:
+  # Backend Django para desarrollo local
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: dhl-django-backend-dev
+    ports:
+      - "8000:8000"
+    environment:
+      - DEBUG=True
+      - SECRET_KEY=tu-clave-secreta-super-segura-cambiala-en-produccion
+      - ALLOWED_HOSTS=localhost,127.0.0.1,0.0.0.0,backend
+      - DATABASE_URL=sqlite:///db.sqlite3
+      - DHL_USERNAME=${DHL_USERNAME:-apO3fS5mJ8zT7h}
+      - DHL_PASSWORD=${DHL_PASSWORD:-J^4oF@1qW!0qS!5b}
+      - DHL_BASE_URL=https://express.api.dhl.com
+      - DHL_ENVIRONMENT=sandbox
+      - CORS_ALLOWED_ORIGINS=http://localhost:3000,http://localhost:3002,http://127.0.0.1:3000
+      - DISABLE_COLLECTSTATIC=0
+    volumes:
+      - .:/app
+      - ./logs:/app/logs
+      - ./media:/app/media
+      - ./staticfiles:/app/staticfiles
+    restart: unless-stopped
+    command: >
+      sh -c "python manage.py migrate &&
+             python manage.py collectstatic --noinput &&
+             python manage.py runserver 0.0.0.0:8000"
+
+  # Frontend React para desarrollo local
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: dhl-react-frontend-dev
+    ports:
+      - "3000:3000"
+    environment:
+      - REACT_APP_API_URL=http://localhost:8000/api
+      - REACT_APP_BACKEND_URL=http://localhost:8000
+      - REACT_APP_ENVIRONMENT=development
+      - GENERATE_SOURCEMAP=true
+      - WATCHPACK_POLLING=true
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    restart: unless-stopped
+    depends_on:
+      - backend
+    stdin_open: true
+    tty: true
+
+  # PostgreSQL para desarrollo local (opcional)
+  postgres:
+    image: postgres:13-alpine
+    container_name: dhl-postgres-dev
+    environment:
+      - POSTGRES_DB=dhl_db
+      - POSTGRES_USER=dhl_user
+      - POSTGRES_PASSWORD=dhl_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data_dev:/var/lib/postgresql/data
+    restart: unless-stopped
+
+volumes:
+  postgres_data_dev:

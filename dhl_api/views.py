@@ -24,12 +24,12 @@ from .serializers import (
 )
 from .services import DHLService
 from .models import Shipment, RateQuote
-from faker import Faker
 from django.conf import settings
 import os
+import requests
+import json
 
 logger = logging.getLogger(__name__)
-fake = Faker()
 
 
 @api_view(['POST'])
@@ -427,8 +427,6 @@ def tracking_view(request):
             )
             
             # HOTFIX: Usar parsing directo para evitar error de parsing
-            import requests
-            import json
             
             # Hacer la llamada directa a DHL (REST API)
             tracking_url = f"https://express.api.dhl.com/mydhlapi/shipments/{tracking_number}/tracking"
