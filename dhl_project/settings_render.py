@@ -122,7 +122,9 @@ SIMPLE_JWT = {
 }
 
 # CORS simple
-CORS_ALLOWED_ORIGINS = os.getenv('CORS_ALLOWED_ORIGINS', '*').split(',')
+CORS_ALLOWED_ORIGINS = [
+    "https://dhl-frontend.onrender.com",
+]
 CORS_ALLOW_ALL_ORIGINS = True
 
 # DHL API Settings
