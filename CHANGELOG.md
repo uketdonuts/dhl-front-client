@@ -5,8 +5,30 @@ Todos los cambios importantes de este proyecto serán documentados en este archi
 El formato está basado en [Keep a Changelog](https://keepachangelog.com/es/1.0.0/),
 y este proyecto se adhiere al [Versionado Semántico](https://semver.org/lang/es/).
 
+# Changelog
+
+Todos los cambios importantes de este proyecto serán documentados en este archivo.
+
+El formato está basado en [Keep a Changelog](https://keepachangelog.com/es/1.0.0/),
+y este proyecto se adhiere al [Versionado Semántico](https://semver.org/lang/es/).
+
 ## [Unreleased]
 ### Added
+- **🔧 Configuración de desarrollo local mejorada**: 
+  - Nuevo `docker-compose.dev.yml` para desarrollo con frontend y backend
+  - Configuración `.env` actualizada con variables para desarrollo
+  - Script `docker-dev.bat` mejorado con más comandos útiles
+  - Soporte para SQLite en desarrollo local
+  - Health check endpoint en `/api/health/`
+  - Configuración automática de base de datos según DATABASE_URL
+
+### Fixed
+- **🔧 Error de build**: Eliminado `pkg-resources==0.0.0` de requirements.txt que causaba fallo de instalación
+  - `pkg-resources` es un paquete virtual que no debe ser instalado explícitamente
+
+### Changed
+- **📦 Base de datos flexible**: Settings.py ahora soporta SQLite, PostgreSQL via DATABASE_URL o configuración individual
+- **🐳 Docker optimizado**: Separación clara entre desarrollo (dev) y producción (render)
 - **🚀 Configuración para Render Free Tier**: Optimización completa para despliegue en Render gratuito (500MB RAM, 0.1 CPU)
   - `docker-compose.yml` optimizado con límites de memoria (400MB para backend)
   - `Dockerfile.render` específico para producción en Render

@@ -35,7 +35,7 @@ INSTALLED_APPS = [
     'rest_framework',
     'rest_framework_simplejwt',
     'corsheaders',
-    'django_extensions',
+    # 'django_extensions',  # Comentado para ahorrar memoria
     
     # Local apps
     'dhl_api',
@@ -73,17 +73,35 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'dhl_project.wsgi.application'
 
-# Database
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': config('DB_NAME', default='dhl_db'),
-        'USER': config('DB_USER', default='dhl_user'),
-        'PASSWORD': config('DB_PASSWORD', default='dhl_password'),
-        'HOST': config('DB_HOST', default='localhost'),
-        'PORT': config('DB_PORT', default='5432'),
+# Database configuration
+DATABASE_URL = config('DATABASE_URL', default=None)
+
+if DATABASE_URL and DATABASE_URL.startswith('sqlite'):
+    # SQLite configuration for development
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.sqlite3',
+            'NAME': BASE_DIR / 'db.sqlite3',
+        }
     }
-}
+elif DATABASE_URL and DATABASE_URL.startswith('postgresql'):
+    # PostgreSQL configuration using DATABASE_URL
+    import dj_database_url
+    DATABASES = {
+        'default': dj_database_url.config(default=DATABASE_URL)
+    }
+else:
+    # Default PostgreSQL configuration using individual variables
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.postgresql',
+            'NAME': config('DB_NAME', default='dhl_db'),
+            'USER': config('DB_USER', default='dhl_user'),
+            'PASSWORD': config('DB_PASSWORD', default='dhl_password'),
+            'HOST': config('DB_HOST', default='localhost'),
+            'PORT': config('DB_PORT', default='5432'),
+        }
+    }
 
 # Password validation
 AUTH_PASSWORD_VALIDATORS = [
