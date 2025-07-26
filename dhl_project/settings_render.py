@@ -13,13 +13,11 @@ SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-change-me-in-production')
 DEBUG = os.getenv('DEBUG', 'False').lower() == 'true'
 
 # Hosts permitidos
-ALLOWED_HOSTS = [
-    'localhost',
-    '127.0.0.1',
-    '0.0.0.0',
-    '.onrender.com',
-    os.getenv('RENDER_EXTERNAL_HOSTNAME', '')
-]
+ALLOWED_HOSTS = config(
+    'ALLOWED_HOSTS', 
+    default='localhost,127.0.0.1,0.0.0.0,dhl-frontend.onrender.com,*.onrender.com', 
+    cast=Csv()
+)
 
 # Apps mínimas
 INSTALLED_APPS = [
@@ -122,7 +120,9 @@ SIMPLE_JWT = {
 }
 
 # CORS simple
-CORS_ALLOWED_ORIGINS = os.getenv('CORS_ALLOWED_ORIGINS', '*').split(',')
+CORS_ALLOWED_ORIGINS = [
+    "https://dhl-frontend.onrender.com",
+]
 CORS_ALLOW_ALL_ORIGINS = True
 
 # DHL API Settings
