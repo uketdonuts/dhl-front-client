@@ -1,6 +1,190 @@
-# Changelog
+# ### Fixed
+## [Unreleased]
+### Fixed
+- **✅ Postal Code en Landing Cost**: Corregido error donde `origin.postal_code` se requería como obligatorio en el validador de landing cost. Ahora usa "0" como valor por defecto cuando está vacío, igual que el endpoint de cotizaciones (rate)
+- **🔧 Peso declarado en cotizaciones**: Corregido error donde `declared_weight` permanecía en 0 mientras `weight` se actualizaba, causando validación fallida en API
+- **⚖️ Sincronización de peso**: La función `updateRateData` ahora sincroniza automáticamente `declared_weight` con `weight` cuando el usuario ingresa el peso
+- **⚠️ Warning React corregido**: Eliminado warning "defaultProps will be removed" reemplazando con parámetros por defecto en ShipmentTab
+- **✅ RESUELTO: Dropdowns de país en formulario de envío**: Corregido problema donde dropdowns mostraban "selecciona un país" aunque los datos se transfirieran correctamente
+- **🔄 Sincronización de formularios**: Agregados useEffect para sincronizar SmartLocationDropdown cuando cambian los datos desde cotizaciones
+- **✅ RESUELTO: Transferencia de datos país en cotizaciones**: Los datos de país SÍ se transferían correctamente, el problema era una validación demasiado estricta
+- **🔍 Debugging exitoso**: Confirmado que países llegan correctamente (PA→Panamá, AL→Albania) desde cotizaciones a envíos
+- **🚀 Transferencia de datos país en cotizaciones**: Corregido el problema donde los datos de país no se transferían de las cotizaciones al crear envíos
+- **✅ Validación mejorada**: Agregada validación específica que alerta al usuario si faltan datos de país antes de crear un envío
+- **💬 Feedback de usuario**: El sistema ahora informa claramente al usuario cuando debe seleccionar países en los dropdowns de ubicaciónelog
+## [Unreleased]
+### Fixed
+- **� Debugging transferencia de datos país**: Investigando problema donde ciudad se transfiere pero país no
+- **�🚀 Transferencia de datos país en cotizaciones**: Corregido el problema donde los datos de país no se transferían de las cotizaciones al crear envíos
+- **✅ Validación mejorada**: Agregada validación específica que alerta al usuario si faltan datos de país antes de crear un envío
+- **💬 Feedback de usuario**: El sistema ahora informa claramente al usuario cuando debe seleccionar países en los dropdowns de ubicación
 
-Todos los cambios importantes de este proyecto serán documentados en este archivo.
+### Changed
+- **🚀 Mejorado Botón "Crear Envío" en Cotizaciones**:
+  - Cambiado texto del botón de "Crear Shipment" a "Crear Envío" (español)
+  - Mejorado prellenado de datos del destinatario con plantillas más realistas
+  - Agregados números de teléfono de ejemplo en formatos internacionales
+  - Mejorado mensaje de notificación para indicar qué datos completar
+  - Agregadas clases CSS para resaltar campos prellenados que requieren atención
+- **🔧 Debugging mejorado**: Agregado logging detallado para rastrear la transferencia de datos entre cotización y envío
+
+### Added
+- **⚡ Optimización de Rate Limiting y Cache para Service Zones**:
+  - Agregado cache de 30 minutos al endpoint `analyze_country_structure`
+  - Agregado cache de 15 minutos al endpoint `search_service_zones`
+  - Implementadas throttle classes personalizadas para service zones
+  - Aumentado límite de requests anónimos de 100/hora a 300/hora
+  - Aumentado límite de requests autenticados de 1000/hora a 2000/hora
+  - Nuevo rate limit específico: 600/hora para consultas de service zones
+  - Solución al error "Solicitud fue regulada (throttled)" en SmartLocationDropdown
+- **📱 Navegación Móvil Mejorada**: Optimizada la navegación para dispositivos móviles de 390px y superiores
+  - Grid de navegación 3x2 especialmente diseñado para móviles (hidden en desktop)
+  - Botones con iconos grandes y texto corto optimizados para táctil
+  - Navegación desktop preservada con `hidden md:flex` (hidden en móvil)
+  - Header responsive con layout vertical en móvil y horizontal en desktop
+  - Badges de usuario adaptables con text-xs en móvil
+  - Selector de cuenta DHL con padding adaptativo (p-3 móvil, p-4 desktop)
+  - Container principal con padding responsive (py-4 md:py-8, px-2 md:px-4)
+  - Títulos escalables (text-xl md:text-2xl) para mejor legibilidad
+  - Texto adaptativo (text-sm md:text-base) para diferentes tamaños de pantalla
+- **🧹 Eliminados Labels de Debug**: Removidos elementos de información técnica que aparecían en pantalla
+  - Eliminada sección "Debug Info" del componente SmartLocationDropdown
+  - Ya no se muestra información técnica como patrones, campos de ciudad, estados, etc.
+  - Interfaz más limpia y profesional sin información de desarrollo
+  - Componentes optimizados para producción sin elementos de depuración
+- **🧹 Formularios Completamente Limpios**: Eliminados todos los datos precargados/ejemplo
+  - Formulario de cotización (Rate) inicia con campos vacíos: peso=0, dimensiones=0x0x0
+  - Formulario de envío (Shipment) inicia sin datos personales precargados 
+  - Formulario de Landed Cost inicia completamente vacío sin productos de ejemplo
+  - Solo se preservan datos cuando se transfiere desde cotizaciones/landed cost
+  - Experiencia más limpia para usuarios que prefieren empezar desde cero
+  - Validaciones actualizadas para requerir peso > 0 en cotizaciones
+- **📦 Botón "Crear Envío" en Landed Cost**: Nueva funcionalidad para crear envíos desde resultados de costo arancelario
+  - Botón "📦 Crear Envío con estos Datos" integrado en los resultados de Landed Cost
+  - Pre-llenado automático de datos del remitente y destinatario con información del cálculo
+  - Navegación automática a la pestaña "Crear Envío" al hacer clic
+  - Transferencia completa de datos: origen, destino, peso, dimensiones y costo estimado
+  - Notificación informativa mostrando los datos que se van a transferir
+  - Integración perfecta con el flujo existente de creación de shipments
+  - Funcionalidad consistente con el botón "Crear Envío" de cotizaciones (Rate)
+- **⚡ Optimizaze_country_structure`
+  - Agregado cache de 15 minutos al endpoint `search_service_zones`
+  - Implementadas throttle classes personalizadas para service zones
+  - Aumentado límite de requests anónimos de 100/hora a 300/hora
+  - Aumentado límite de requests autenticados de 1000/hora a 2000/hora
+  - Nuevo rate limit específico: 600/hora para consultas de service zones
+  - Solución al error "Solicitud fue regulada (throttled)" en SmartLocationDropdown
+- **🚀 SmartLo# Changelog
+## [Unreleased]
+### Added
+- **🎨 Sistema de Diseño Profesional Completo**:
+  - Nuevo sistema de colores corporativo con paleta extendida (50-900)
+  - Integración de fuente Inter para mayor profesionalismo y legibilidad
+  - Sistema de clases CSS utilitarias reutilizables (btn, card, form, alert, etc.)
+  - Configuración Tailwind expandida con spacing, shadows y typography mejorados
+  - Scrollbar personalizada y micro-interacciones suaves
+- **🎯 Interfaz de Usuario Completamente Rediseñada**:
+  - Navegación principal mejorada con logo profesional y badges de estado
+  - Login rediseñado con cards, iconografía SVG y estados de carga animados
+  - Dashboard con header informativo, navegación por pestañas mejorada y layout responsivo
+  - AccountDropdown con diseño consistente y mejor organización visual
+  - Todas las pestañas actualizadas con el nuevo sistema de diseño
+- **📱 Responsive Design Completo**:
+  - Layout adaptativo para desktop, tablet y mobile
+  - Grid system flexible que se ajusta automáticamente
+  - Navegación colapsable en dispositivos pequeños
+  - Typography escalable según el dispositivo
+- **🔧 Componentes Mejorados Manteniendo Funcionalidad**:
+  - RateTabImproved con cards temáticas, proceso visual numerado e iconografía contextual
+  - Sistema de alertas unificado (success, warning, error, info) con iconos SVG
+  - Botones con estados de hover, focus y loading mejorados
+  - Forms con labels informativos, tooltips y validación visual
+  - Notificaciones con botón de cierre y transiciones suavesligentes para remitente y destinatario
+  - Validación automática de ubicaciones con servicio DHL Express disponible
+  - Interfaz consistente con RateTabImproved y LandedCostTab
+  - Manejo automático de códigos de país, estado, ciudad y código postal
+  - Reducción significativa de errores en datos de ubicación para envíos
+  - Iconografía visual distintiva (📍) para identificar secciones de ubicación
+  - Sección de ayuda informativa sobre cobertura de DHL Express
+- **🌟 SmartLocationDropdown integrado en LandedCostTab**:
+  - Reemplazados inputs manuales por dropdowns inteligentes para origen y destino
+  - Validación automática de ubicaciones con servicio DHL Express disponible
+  - Interfaz consistente con RateTabImproved para mejor experiencia de usuario
+  - Manejo automático de códigos de país, ciudad y código postal
+  - Reducción significativa de errores de entrada de ubicaciones
+  - Sección de ayuda informativa sobre cobertura de DHL Express
+- **� Sistema de logging avanzado con rotación por timestamp**:angelog
+## [Unreleased]
+### Added
+- **� Sistema de logging avanzado con rotación por timestamp**:
+  - Configuración de logging con `TimedRotatingFileHandler` para rotación diaria automática
+  - Logs separados por funcionalidad: `django.log`, `errors.log`, `dhl_api.log`, `requests.log`
+  - Formato timestamped con información detallada: timestamp, nivel, módulo, función, línea
+  - Retención configurable de archivos históricos (7-60 días según tipo)
+  - Logs específicos para DHL API, errores críticos, requests HTTP y eventos de autenticación
+  - Configuración diferenciada por entorno (development/staging/production)
+- **🛠️ Herramientas de gestión de logs**:
+  - Script `manage_logs.py` con menú interactivo para gestión completa de logs
+  - Script batch `logs-manager.bat` para Windows con opciones de visualización en tiempo real
+  - Funciones de análisis: estadísticas de logs, búsqueda por patrones, limpieza automática
+  - Compresión automática de logs antiguos para optimización de espacio
+  - Visualización de logs por fecha y timestamp específico
+- **⚙️ Configuración de logging personalizable**:
+  - Módulo `logging_config.py` con configuraciones avanzadas por entorno
+  - Mixins para logging de performance y eventos de seguridad
+  - Decorators para logging automático de tiempo de ejecución de funciones
+  - Logger específico para llamadas API DHL con métricas de rendimiento
+  - Logging estructurado en formato JSON para análisis automatizado
+- **�💡 Tooltips de ayuda en cotización de tarifas**:
+  - Tooltips informativos con FieldTooltip en todos los campos del formulario de cotización
+  - Información detallada sobre límites, ejemplos y validaciones para cada campo
+  - Documentación específica para origen, destino, peso, dimensiones y configuraciones
+  - Nota informativa para usuarios sobre la disponibilidad de ayuda contextual
+  - Definiciones de campos específicas para rate en fieldInfo.js con ejemplos de DHL
+- **🔍 Frontend ePOD completamente rediseñado**:angelog
+## [Unreleased]
+### Added
+- **� Frontend ePOD completamente rediseñado**:
+  - Sección de estado del procesamiento con información técnica detallada
+  - Troubleshooting automático con causas posibles y sugerencias específicas
+  - Visualización de validaciones realizadas (base64, PDF, estructura DHL, autenticación)
+  - Información técnica expandible con datos completos de la API
+  - Estados visuales mejorados: éxito (verde), error (rojo), warning (amarillo)
+  - Métricas de procesamiento: tiempo de respuesta, documentos encontrados, cuenta utilizada
+  - Detalles de la API DHL: endpoint, content-type, HTTP status, tiempo de respuesta
+  - Ejemplo completo en `example_frontend_responses.py` mostrando todos los escenarios
+- **�🎯 Manejo mejorado de respuestas para cliente en ePOD**: 
+  - Vista `epod_view` completamente reescrita con información detallada para el cliente
+  - Estados claros: "found", "not_found", "connection_error", "validation_error", "internal_error"
+  - Información de procesamiento en tiempo real: validación, contacto API, recepción respuesta
+  - Métricas de rendimiento: tiempo de respuesta API, tamaño de documentos, contadores
+  - Guías de resolución de problemas (troubleshooting) automáticas para cada tipo de error
+  - IDs de error únicos para soporte técnico con timestamps
+  - Mensajes amigables y sugerencias específicas para cada escenario
+- **📋 Serializer ePOD mejorado**:
+  - Parámetro `content_type` con validación de tipos DHL oficiales
+  - Opciones: epod-summary, epod-detail, epod-detail-esig, epod-summary-esig, etc.
+  - Validación de entrada más robusta
+- **📄 Manejo mejorado de respuestas ePOD**: 
+  - Parser completamente reescrito basado en documentación oficial DHL
+  - Validación robusta de contenido base64 con verificación de formato
+  - Manejo inteligente de múltiples documentos (selecciona automáticamente el válido)
+  - Información detallada de cada documento: tamaño, formato, validez
+  - Estadísticas completas: documentos válidos/inválidos, tamaños en MB/bytes
+  - Códigos de error específicos y sugerencias para cada tipo de fallo
+  - Soporte para diferentes formatos (PDF, etc.) y tipos de documento (POD, SIGNATURE)
+  - Logging mejorado para debugging y monitoreo
+- **🔍 Validación avanzada de base64**:
+  - Verificación de caracteres válidos y longitud correcta
+  - Decodificación segura con manejo de errores
+  - Detección automática de contenido PDF
+- **📄 Headers mejorados para ePOD API**: 
+  - Nuevo método `_get_epod_headers()` con todos los headers recomendados por DHL
+  - Headers adicionales: Message-Reference, Message-Reference-Date, Plugin-Name, Plugin-Version
+  - Headers de plataforma: Shipping-System-Platform-Name/Version, Webstore-Platform-Name/Version
+  - Header x-version con versión de API DHL (3.0.0)
+  - Generación automática de UUID para Message-Reference y timestamp RFC 2822
+- **🔧 Configuración de desarrollo local mejorada**:s cambios importantes de este proyecto serán documentados en este archivo.
 
 El formato está basado en [Keep a Changelog](https://keepachangelog.com/es/1.0.0/),
 y este proyecto se adhiere al [Versionado Semántico](https://semver.org/lang/es/).
@@ -14,13 +198,30 @@ y este proyecto se adhiere al [Versionado Semántico](https://semver.org/lang/es
 
 ## [Unreleased]
 ### Added
-- **🔧 Configuración de desarrollo local mejorada**: 
+- **� Headers mejorados para ePOD API**: 
+  - Nuevo método `_get_epod_headers()` con todos los headers recomendados por DHL
+  - Headers adicionales: Message-Reference, Message-Reference-Date, Plugin-Name, Plugin-Version
+  - Headers de plataforma: Shipping-System-Platform-Name/Version, Webstore-Platform-Name/Version
+  - Header x-version con versión de API DHL (3.0.0)
+  - Generación automática de UUID para Message-Reference y timestamp RFC 2822
+- **�🔧 Configuración de desarrollo local mejorada**: 
   - Nuevo `docker-compose.dev.yml` para desarrollo con frontend y backend
   - Configuración `.env` actualizada con variables para desarrollo
   - Script `docker-dev.bat` mejorado con más comandos útiles
   - Soporte para SQLite en desarrollo local
   - Health check endpoint en `/api/health/`
   - Configuración automática de base de datos según DATABASE_URL
+- **⚠️ Validación de Warning 200200 (Códigos HS)**:
+  - Detecta automáticamente códigos HS incompletos o inválidos
+  - Explica por qué DHL no puede calcular aranceles sin códigos HS completos
+  - Proporciona ejemplos de códigos HS correctos por categoría de producto
+  - Warnings específicos para códigos genéricos (999999), inválidos, o muy cortos
+  - Demo educativo `demo_warning_200200.py` con ejemplos prácticos
+- **💰 Sistema de validación de precio mejorado**:
+  - Validaciones automáticas para opciones que afectan precio (DTP, seguro, cargos)
+  - Estimaciones de impacto en costo antes del cálculo
+  - Warnings específicos sobre combinaciones costosas
+  - Documentación completa en PRICE_IMPACT_ANALYSIS.md
 
 ### Fixed
 - **🔧 Error de build**: Eliminado `pkg-resources==0.0.0` de requirements.txt que causaba fallo de instalación

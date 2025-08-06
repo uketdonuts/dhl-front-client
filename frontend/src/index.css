@@ -1,17 +1,266 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-body {
-  margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
-    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
-    sans-serif;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+@layer base {
+  * {
+    @apply border-corporate-200;
+  }
+  
+  body {
+    @apply bg-corporate-50 text-corporate-900 font-sans;
+    margin: 0;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-semibold tracking-tight;
+  }
+
+  h1 {
+    @apply text-3xl;
+  }
+
+  h2 {
+    @apply text-2xl;
+  }
+
+  h3 {
+    @apply text-xl;
+  }
+
+  h4 {
+    @apply text-lg;
+  }
 }
 
-code {
-  font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
-    monospace;
+@layer components {
+  /* Botones estándar */
+  .btn {
+    @apply inline-flex items-center justify-center rounded-lg px-4 py-2 text-sm font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2;
+  }
+
+  .btn-primary {
+    @apply bg-dhl-red text-white hover:bg-red-700 focus:ring-dhl-red shadow-soft;
+  }
+
+  .btn-secondary {
+    @apply bg-corporate-100 text-corporate-700 hover:bg-corporate-200 focus:ring-corporate-500 border border-corporate-300;
+  }
+
+  .btn-success {
+    @apply bg-success-500 text-white hover:bg-success-600 focus:ring-success-500 shadow-soft;
+  }
+
+  .btn-warning {
+    @apply bg-warning-500 text-white hover:bg-warning-600 focus:ring-warning-500 shadow-soft;
+  }
+
+  .btn-danger {
+    @apply bg-error-500 text-white hover:bg-error-600 focus:ring-error-500 shadow-soft;
+  }
+
+  .btn-outline {
+    @apply border-2 border-corporate-300 text-corporate-700 hover:bg-corporate-50 focus:ring-corporate-500;
+  }
+
+  /* Cards */
+  .card {
+    @apply bg-white rounded-xl border border-corporate-200 shadow-soft;
+  }
+
+  .card-header {
+    @apply px-6 py-4 border-b border-corporate-200;
+  }
+
+  .card-body {
+    @apply px-6 py-4;
+  }
+
+  .card-footer {
+    @apply px-6 py-4 border-t border-corporate-200 bg-corporate-50;
+  }
+
+  /* Forms */
+  .form-input {
+    @apply block w-full px-3 py-2 border border-corporate-300 rounded-lg shadow-sm placeholder-corporate-400 focus:outline-none focus:ring-2 focus:ring-dhl-red focus:border-transparent transition-all duration-200;
+  }
+
+  .form-label {
+    @apply block text-sm font-medium text-corporate-700 mb-2;
+  }
+
+  .form-help {
+    @apply text-xs text-corporate-500 mt-1;
+  }
+
+  .form-error {
+    @apply text-xs text-error-600 mt-1;
+  }
+
+  /* Navigation */
+  .nav-tab {
+    @apply px-4 py-2 text-sm font-medium rounded-lg transition-all duration-200 flex items-center space-x-2;
+  }
+
+  .nav-tab-active {
+    @apply bg-dhl-red text-white shadow-soft;
+  }
+
+  .nav-tab-inactive {
+    @apply text-corporate-600 hover:text-corporate-900 hover:bg-corporate-100;
+  }
+
+  /* Mobile Navigation */
+  .mobile-nav-tab {
+    @apply flex flex-col items-center justify-center p-3 text-xs font-medium rounded-lg transition-all duration-200 min-h-[60px] border border-transparent;
+  }
+
+  .mobile-nav-tab-active {
+    @apply bg-dhl-red text-white shadow-soft border-dhl-red;
+  }
+
+  .mobile-nav-tab-inactive {
+    @apply text-corporate-600 hover:text-corporate-900 hover:bg-corporate-100 border-corporate-200;
+  }
+
+  /* Layouts */
+  .container-main {
+    @apply max-w-7xl mx-auto px-4 sm:px-6 lg:px-8;
+  }
+
+  .section-header {
+    @apply mb-6;
+  }
+
+  .section-title {
+    @apply text-2xl font-semibold text-corporate-900 mb-2;
+  }
+
+  .section-subtitle {
+    @apply text-corporate-600 text-base;
+  }
+
+  /* Alerts */
+  .alert {
+    @apply rounded-lg p-4 border-l-4;
+  }
+
+  .alert-success {
+    @apply bg-success-50 border-success-500 text-green-800;
+  }
+
+  .alert-warning {
+    @apply bg-warning-50 border-warning-500 text-yellow-800;
+  }
+
+  .alert-error {
+    @apply bg-error-50 border-error-500 text-red-800;
+  }
+
+  .alert-info {
+    @apply bg-info-50 border-info-500 text-blue-800;
+  }
+
+  /* Enhanced DHL Error Alerts */
+  .alert-dhl-error {
+    @apply bg-red-50 border-l-4 border-red-500 p-4 rounded-lg;
+  }
+
+  .alert-dhl-error .title {
+    @apply text-red-800 font-semibold text-sm mb-2 flex items-center;
+  }
+
+  .alert-dhl-error .details {
+    @apply text-red-700 text-sm leading-relaxed;
+  }
+
+  .alert-dhl-warning {
+    @apply bg-yellow-50 border-l-4 border-yellow-400 p-4 rounded-lg;
+  }
+
+  .alert-dhl-warning .title {
+    @apply text-yellow-800 font-semibold text-sm mb-2 flex items-center;
+  }
+
+  .alert-dhl-warning .details {
+    @apply text-yellow-700 text-sm leading-relaxed;
+  }
+
+  /* Loading states */
+  .loading-spinner {
+    @apply animate-spin rounded-full border-2 border-corporate-200 border-t-dhl-red;
+  }
+
+  /* Badges */
+  .badge {
+    @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium;
+  }
+
+  .badge-success {
+    @apply bg-green-100 text-green-800;
+  }
+
+  .badge-warning {
+    @apply bg-yellow-100 text-yellow-800;
+  }
+
+  .badge-error {
+    @apply bg-red-100 text-red-800;
+  }
+
+  .badge-info {
+    @apply bg-blue-100 text-blue-800;
+  }
+
+  .badge-neutral {
+    @apply bg-corporate-100 text-corporate-800;
+  }
+
+  /* Campos prellenados que requieren atención */
+  .form-input-prefilled {
+    @apply bg-yellow-50 border-yellow-300 focus:border-yellow-500 focus:ring-yellow-500;
+  }
+
+  .form-input-prefilled::placeholder {
+    @apply text-yellow-600;
+  }
+
+  /* Indicador de campo requerido */
+  .field-required::after {
+    content: " *";
+    @apply text-red-500;
+  }
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  @apply bg-corporate-100;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply bg-corporate-400 rounded-full;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  @apply bg-corporate-500;
+}
+
+/* Smooth focus transitions */
+*:focus {
+  outline: none;
+}
+
+/* Print styles */
+@media print {
+  .no-print {
+    display: none !important;
+  }
 } 
