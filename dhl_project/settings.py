@@ -22,7 +22,7 @@ DEBUG = config('DEBUG', default=True, cast=bool)
 
 ALLOWED_HOSTS = config(
     'ALLOWED_HOSTS', 
-    default='localhost,127.0.0.1,0.0.0.0,dhl-frontend.onrender.com,*.onrender.com', 
+    default='localhost,127.0.0.1,0.0.0.0,backend', 
     cast=Csv()
 )
 # Application definition
@@ -163,8 +163,9 @@ REST_FRAMEWORK = {
         'rest_framework.throttling.UserRateThrottle'
     ],
     'DEFAULT_THROTTLE_RATES': {
-        'anon': '100/hour',
-        'user': '1000/hour'
+        'anon': '300/hour',      # Aumentado para SmartLocationDropdown
+        'user': '2000/hour',     # Aumentado para usuarios autenticados
+        'service_zones': '600/hour'  # Rate limit específico para service zones
     }
 }
 
@@ -190,16 +191,13 @@ SIMPLE_JWT = {
     'JTI_CLAIM': 'jti',
 }
 
-# CORS settings
-CORS_ALLOWED_ORIGINS = [
-    "https://dhl-frontend.onrender.com",
-]
-
+# CORS settings - Simple y limpio
+CORS_ALLOW_ALL_ORIGINS = DEBUG
 CORS_ALLOW_CREDENTIALS = True
 # DHL Configuration
 DHL_USERNAME = config('DHL_USERNAME', default='apO3fS5mJ8zT7h')
 DHL_PASSWORD = config('DHL_PASSWORD', default='J^4oF@1qW!0qS!5b')
-DHL_BASE_URL = config('DHL_BASE_URL', default='https://wsbexpress.dhl.com')
+DHL_BASE_URL = config('DHL_BASE_URL', default='https://express.api.dhl.com')
 DHL_ENVIRONMENT = config('DHL_ENVIRONMENT', default='production')
 
 # Cache configuration
@@ -210,60 +208,123 @@ CACHES = {
     }
 }
 
-# Logging configuration
+# Logging configuration ÓPTIMO - Enfoque híbrido con nombres timestamped
+# Para máximo rendimiento + navegación fácil, usar configuración híbrida:
+from datetime import datetime
+current_date = datetime.now().strftime('%Y-%m-%d')
+
 LOGGING = {
     'version': 1,
     'disable_existing_loggers': False,
     'formatters': {
-        'verbose': {
-            'format': '%(levelname)s %(asctime)s %(module)s %(process)d %(thread)d %(message)s',
+        'timestamped': {
+            'format': '%(asctime)s | %(levelname)-8s | %(name)-20s | %(funcName)-15s:%(lineno)-4d | %(message)s',
+            'datefmt': '%H:%M:%S',  # Solo hora (fecha ya está en nombre archivo)
             'style': '%',
         },
         'simple': {
-            'format': '%(levelname)s %(message)s',
-            'style': '%',
-        },
-        'detailed': {
-            'format': '\n-----------------\n%(levelname)s [%(asctime)s] [%(name)s:%(lineno)s] %(message)s',
+            'format': '%(levelname)s: %(message)s',
             'style': '%',
         },
     },
     'handlers': {
-        'file': {
+        # DJANGO GENERAL - Archivo diario con rotación por tamaño (ÓPTIMO)
+        'django_file': {
+            'level': 'INFO',
+            'class': 'logging.handlers.RotatingFileHandler',
+            'filename': os.path.join(BASE_DIR, 'logs', f'django_{current_date}.log'),
+            'formatter': 'timestamped',
+            'maxBytes': 10 * 1024 * 1024,  # 10MB por archivo
+            'backupCount': 5,  # django_2025-08-04.log.1, .2, etc.
+            'encoding': 'utf-8',
+        },
+        
+        # ERRORES - Archivos por HORA para análisis crítico rápido
+        'errors_file': {
+            'level': 'ERROR',
+            'class': 'logging.handlers.TimedRotatingFileHandler',
+            'filename': os.path.join(BASE_DIR, 'logs', f'errors_{current_date}.log'),
+            'formatter': 'timestamped',
+            'when': 'H',  # Cada hora
+            'interval': 1,
+            'backupCount': 48,  # 2 días de errores por hora
+            'encoding': 'utf-8',
+        },
+        
+        # DHL API - Archivo por DÍA (balance perfecto navegación/rendimiento)
+        'dhl_file': {
             'level': 'DEBUG',
             'class': 'logging.FileHandler',
-            'filename': os.path.join(BASE_DIR, 'logs', 'django.log'),
-            'formatter': 'detailed',
+            'filename': os.path.join(BASE_DIR, 'logs', f'dhl_api_{current_date}.log'),
+            'formatter': 'timestamped',
+            'encoding': 'utf-8',
         },
+        
+        # REQUESTS - Rotación por tamaño (alto volumen)
+        'requests_file': {
+            'level': 'WARNING',
+            'class': 'logging.handlers.RotatingFileHandler',
+            'filename': os.path.join(BASE_DIR, 'logs', f'requests_{current_date}.log'),
+            'formatter': 'timestamped',
+            'maxBytes': 5 * 1024 * 1024,  # 5MB
+            'backupCount': 3,
+            'encoding': 'utf-8',
+        },
+        
+        # PERFORMANCE - Por timestamp específico para análisis detallado
+        'performance_file': {
+            'level': 'INFO',
+            'class': 'logging.FileHandler',
+            'filename': os.path.join(BASE_DIR, 'logs', f'performance_{current_date}_{datetime.now().strftime("%H%M")}.log'),
+            'formatter': 'timestamped',
+            'encoding': 'utf-8',
+        },
+        
+        # Console handler limpio
         'console': {
-            'level': 'DEBUG',
+            'level': 'INFO' if not DEBUG else 'DEBUG',
             'class': 'logging.StreamHandler',
-            'formatter': 'detailed',
+            'formatter': 'simple',
         },
     },
     'root': {
-        'handlers': ['console', 'file'],
+        'handlers': ['console', 'django_file'],
         'level': 'DEBUG',
     },
     'loggers': {
         'django': {
-            'handlers': ['console', 'file'],
-            'level': 'DEBUG',
+            'handlers': ['console', 'django_file', 'errors_file'],
+            'level': 'INFO' if not DEBUG else 'DEBUG',
             'propagate': False,
         },
         'dhl_api': {
-            'handlers': ['console', 'file'],
+            'handlers': ['console', 'dhl_file', 'errors_file'],
             'level': 'DEBUG',
+            'propagate': False,
+        },
+        'performance': {
+            'handlers': ['performance_file'],
+            'level': 'INFO',
             'propagate': False,
         },
         'urllib3': {
-            'handlers': ['console'],
-            'level': 'DEBUG',
+            'handlers': ['requests_file'],
+            'level': 'WARNING',
             'propagate': False,
         },
         'requests': {
-            'handlers': ['console'],
-            'level': 'DEBUG',
+            'handlers': ['requests_file'],
+            'level': 'WARNING',
+            'propagate': False,
+        },
+        'django.contrib.auth': {
+            'handlers': ['django_file', 'errors_file'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'django.db.backends': {
+            'handlers': ['django_file'],
+            'level': 'WARNING',
             'propagate': False,
         },
     },

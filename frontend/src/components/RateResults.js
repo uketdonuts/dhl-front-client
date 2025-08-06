@@ -60,7 +60,7 @@ const RateCard = ({ rate, index, expanded, onToggle, onCreateShipment }) => {
             onClick={() => onCreateShipment(rate)}
             className="px-4 py-2 text-sm font-medium text-white bg-green-600 border border-green-600 rounded-md hover:bg-green-700 transition-colors"
           >
-            📦 Crear Shipment
+            📦 Crear Envío
           </button>
         </div>
       </div>
@@ -161,10 +161,6 @@ const RateResults = ({ result, originalRateData, onCreateShipment }) => {
     if (onCreateShipment) {
       onCreateShipment(selectedRate, originalRateData);
     }
-  };
-
-  const formatWeight = (weight) => {
-    return `${weight?.toFixed(2) || '0.00'} kg`;
   };
 
   if (!result || !result.success) {

@@ -5,40 +5,40 @@ set COMMAND=%1
 
 if "%COMMAND%"=="up" (
     echo Iniciando servicios Docker para desarrollo...
-    docker-compose -f docker-compose.dev.yml up -d
+    docker-compose -f docker-compose.yml up -d
     echo Servicios iniciados:
     echo - Backend: http://localhost:8000
     echo - Frontend: http://localhost:3000
     echo - Admin Django: http://localhost:8000/admin
 ) else if "%COMMAND%"=="down" (
     echo Deteniendo servicios Docker...
-    docker-compose -f docker-compose.dev.yml down
+    docker-compose -f docker-compose.yml down
 ) else if "%COMMAND%"=="build" (
     echo Reconstruyendo imágenes Docker...
-    docker-compose -f docker-compose.dev.yml build --no-cache
+    docker-compose -f docker-compose.yml build --no-cache
 ) else if "%COMMAND%"=="logs" (
     echo Mostrando logs de todos los servicios...
-    docker-compose -f docker-compose.dev.yml logs -f
+    docker-compose -f docker-compose.yml logs -f
 ) else if "%COMMAND%"=="logs-back" (
     echo Mostrando logs del backend...
-    docker-compose -f docker-compose.dev.yml logs -f backend
+    docker-compose -f docker-compose.yml logs -f backend
 ) else if "%COMMAND%"=="logs-front" (
     echo Mostrando logs del frontend...
-    docker-compose -f docker-compose.dev.yml logs -f frontend
+    docker-compose -f docker-compose.yml logs -f frontend
 ) else if "%COMMAND%"=="status" (
     echo Estado de los servicios...
-    docker-compose -f docker-compose.dev.yml ps
+    docker-compose -f docker-compose.yml ps
 ) else if "%COMMAND%"=="restart" (
     echo Reiniciando servicios...
-    docker-compose -f docker-compose.dev.yml restart
+    docker-compose -f docker-compose.yml restart
 ) else if "%COMMAND%"=="db-shell" (
     echo Abriendo shell de PostgreSQL...
-    docker-compose -f docker-compose.dev.yml exec postgres psql -U dhl_user -d dhl_db
+    docker-compose -f docker-compose.yml exec postgres psql -U dhl_user -d dhl_db
 ) else if "%COMMAND%"=="reset-db" (
     echo Reiniciando base de datos...
-    docker-compose -f docker-compose.dev.yml down
+    docker-compose -f docker-compose.yml down
     docker volume rm dhl-front-client_postgres_data_dev 2>nul
-    docker-compose -f docker-compose.dev.yml up -d
+    docker-compose -f docker-compose.yml up -d
 ) else (
     echo Uso: docker-dev.bat [COMANDO]
     echo Comandos disponibles:

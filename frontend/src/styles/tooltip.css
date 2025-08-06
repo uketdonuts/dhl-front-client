@@ -1,0 +1,85 @@
+/* Estilos para tooltips de campos DHL */
+
+/* Animación de fade-in para tooltips */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.2s ease-out;
+}
+
+/* Estilos para tooltips responsivos */
+@media (max-width: 640px) {
+  .tooltip-content {
+    max-width: 250px;
+    font-size: 0.75rem;
+  }
+}
+
+/* Estilos para campos con error */
+.field-error {
+  border-color: #ef4444;
+  box-shadow: 0 0 0 1px #ef4444;
+}
+
+.field-error:focus {
+  border-color: #ef4444;
+  box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.2);
+}
+
+/* Estilos para campos válidos */
+.field-valid {
+  border-color: #10b981;
+}
+
+.field-valid:focus {
+  border-color: #10b981;
+  box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.2);
+}
+
+/* Estilos para iconos de información */
+.info-icon {
+  transition: all 0.2s ease;
+}
+
+.info-icon:hover {
+  transform: scale(1.1);
+}
+
+/* Tooltip posicionamiento mejorado */
+.tooltip-container {
+  position: relative;
+  display: inline-block;
+}
+
+.tooltip-arrow {
+  position: absolute;
+  width: 0;
+  height: 0;
+  border: 6px solid transparent;
+}
+
+/* Colores específicos para diferentes tipos de información */
+.tooltip-required {
+  border-left: 3px solid #ef4444;
+}
+
+.tooltip-optional {
+  border-left: 3px solid #6b7280;
+}
+
+.tooltip-warning {
+  border-left: 3px solid #f59e0b;
+}
+
+.tooltip-info {
+  border-left: 3px solid #3b82f6;
+}
