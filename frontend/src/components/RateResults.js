@@ -163,9 +163,7 @@ const RateResults = ({ result, originalRateData, onCreateShipment }) => {
     }
   };
 
-  const formatWeight = (weight) => {
-    return `${weight?.toFixed(2) || '0.00'} kg`;
-  };
+
 
   if (!result || !result.success) {
     return null;
