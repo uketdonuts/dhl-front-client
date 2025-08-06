@@ -12,7 +12,7 @@ services:
     environment:
       - DEBUG=False
       - SECRET_KEY=${SECRET_KEY:-tu-clave-secreta-super-segura-cambiala-en-produccion}
-      - ALLOWED_HOSTS=${RENDER_EXTERNAL_HOSTNAME:-localhost},127.0.0.1,0.0.0.0,*.onrender.com
+      - ALLOWED_HOSTS=*
       - DATABASE_URL=${DATABASE_URL:-sqlite:///db.sqlite3}
       - DHL_USERNAME=${DHL_USERNAME:-apO3fS5mJ8zT7h}
       - DHL_PASSWORD=${DHL_PASSWORD:-J^4oF@1qW!0qS!5b}
@@ -77,3 +77,19 @@ services:
 
 # volumes:
 #  postgres_data: 
+  # Frontend React
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: dhl-react-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - REACT_APP_API_URL=http://localhost:10000/api
+      - REACT_APP_BACKEND_URL=http://localhost:10000/api
+      - REACT_APP_ENVIRONMENT=development
+      - GENERATE_SOURCEMAP=false
+    depends_on:
+      - backend
+    restart: unless-stopped
