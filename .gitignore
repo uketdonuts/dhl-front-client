@@ -92,3 +92,7 @@ jspm_packages/
 *.TXT
 dhl_api/ESD.TXT
 dhl_api/ESD-sample.TXT
+
+# Base de datos local
+db.sqlite3
+*.sqlite3
