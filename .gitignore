@@ -25,6 +25,7 @@ MANIFEST
 venv/
 env/
 ENV/
+.venv/
 
 # Environment variables
 .env
@@ -32,22 +33,136 @@ ENV/
 .env.development.local
 .env.test.local
 .env.production.local
+.env.backup
+*.env.backup
 
 # Node.js
 node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+lerna-debug.log*
+.npm
+.eslintcache
+.node_repl_history
+.yarn-integrity
+.pnp.*
 
 # React
 frontend/build/
+frontend/dist/
 frontend/.env.local
 frontend/.env.development.local
 frontend/.env.test.local
 frontend/.env.production.local
+frontend/.cache/
+frontend/.parcel-cache/
+frontend/.next/
 
-# IDE
+# Testing
+coverage/
+*.coverage
+htmlcov/
+.tox/
+.pytest_cache/
+.coverage.*
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+
+# IDE y Editores
 .vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.sublime-project
+*.sublime-workspace
+.DS_Store
+.vscode/settings.json.backup
+
+# Sistema operativo
+Thumbs.db
+Desktop.ini
+._.DS_Store
+
+# Django
+*.log
+local_settings.py
+db.sqlite3
+media/
+staticfiles/
+.sass-cache/
+
+# Docker
+docker-compose.override.yml
+.dockerignore.backup
+Dockerfile.backup
+
+# Logs y temporales
+logs/
+*.log
+*.tmp
+*.temp
+*.pid
+*.seed
+*.pid.lock
+
+# Backups y archivos de rescate
+*.bak
+*.backup
+*.orig
+*.rej
+*.swp
+
+# Archivos de análisis y herramientas
+.depcheck/
+.nyc_output/
+bundle-analyzer-report.html
+requirements.current.txt
+cleanup-report-*.txt
+auto-optimize.sh
+maintenance.sh
+
+# Certificados SSL
+ssl/
+*.pem
+*.key
+*.crt
+*.csr
+
+# Archivos grandes que no deberían estar en el repo
+*.zip
+*.tar.gz
+*.rar
+*.7z
+*.dmg
+*.iso
+*.exe
+*.msi
+*.deb
+*.rpm
+
+# Cache de herramientas de desarrollo
+.cache/
+.parcel-cache/
+.webpack-cache/
+.rollup.cache/
+.rpt2_cache/
+.rts2_cache_cjs/
+.rts2_cache_es/
+.rts2_cache_umd/
+
+# Archivos de configuración local
+config.local.js
+settings.local.py
+local.json
+
+# Archivos generados por scripts de limpieza
+auto-optimize.sh
+maintenance.sh
+cleanup-report-*.txt
 .idea/
 *.swp
 *.swo
