@@ -153,7 +153,10 @@ const ActivityHistoryTab = () => {
 
     // Helper: pretty print JSON safely, truncated
     const JsonPreview = ({ data, maxLength = 1200 }) => {
+        // Hooks must be called before any early return
+        const [expanded, setExpanded] = useState(false);
         if (!data) return null;
+
         let json = '';
         try {
             json = JSON.stringify(data, null, 2);
@@ -161,7 +164,6 @@ const ActivityHistoryTab = () => {
             json = String(data);
         }
         const isLong = json.length > maxLength;
-        const [expanded, setExpanded] = useState(false);
         const shown = expanded || !isLong ? json : json.slice(0, maxLength) + '...';
         return (
             <div className="mt-2 bg-gray-50 rounded border border-gray-200 text-xs font-mono whitespace-pre-wrap break-all p-3">
