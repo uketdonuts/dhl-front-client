@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from django.contrib.auth.models import User
-from .models import Shipment, TrackingEvent, RateQuote, EPODDocument, DHLAccount, UserActivity, Contact, ServiceZone
+from .models import Shipment, TrackingEvent, RateQuote, EPODDocument, DHLAccount, UserActivity, Contact, ServiceZone, ServiceAreaCityMap
 
 
 class UserSerializer(serializers.ModelSerializer):
@@ -16,6 +16,12 @@ class ShipmentSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = Shipment
+        fields = '__all__'
+
+
+class ServiceAreaCityMapSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ServiceAreaCityMap
         fields = '__all__'
         read_only_fields = ['tracking_number', 'status', 'estimated_delivery', 'cost', 'created_by', 'created_at', 'updated_at']
 
@@ -98,31 +104,36 @@ class ShipmentRequestSerializer(serializers.Serializer):
     package = serializers.DictField()
     service = serializers.CharField(max_length=1, default='P')
     payment = serializers.CharField(max_length=1, default='S')
+    account_number = serializers.CharField(max_length=20, required=False)
     
     def validate(self, data):
-        """Validación a nivel de objeto para evitar envío a sí mismo"""
+        """Validación a nivel de objeto para evitar envío completamente duplicado"""
         shipper = data.get('shipper', {})
         recipient = data.get('recipient', {})
         
-        # Validar que no sea el mismo email
+        # Solo validar si TODOS los datos principales son idénticos
+        # (esto evita errores de copia-pega completa, pero permite casos legítimos)
         shipper_email = shipper.get('email', '').lower().strip()
         recipient_email = recipient.get('email', '').lower().strip()
-        
-        if shipper_email and recipient_email and shipper_email == recipient_email:
-            raise serializers.ValidationError({
-                'recipient': 'El destinatario no puede ser el mismo que el remitente (mismo email).'
-            })
-        
-        # Validar que no sea la misma combinación de nombre y teléfono
         shipper_name = shipper.get('name', '').lower().strip()
-        shipper_phone = shipper.get('phone', '').strip()
         recipient_name = recipient.get('name', '').lower().strip()
+        shipper_phone = shipper.get('phone', '').strip()
         recipient_phone = recipient.get('phone', '').strip()
+        shipper_address = shipper.get('address', '').lower().strip()
+        recipient_address = recipient.get('address', '').lower().strip()
         
-        if (shipper_name and recipient_name and shipper_name == recipient_name and
-            shipper_phone and recipient_phone and shipper_phone == recipient_phone):
+        # Solo prohibir si ALL los datos críticos son exactamente iguales
+        # (esto indica probable error de usuario, no caso legítimo)
+        if (shipper_email and recipient_email and 
+            shipper_name and recipient_name and 
+            shipper_phone and recipient_phone and
+            shipper_address and recipient_address and
+            shipper_email == recipient_email and
+            shipper_name == recipient_name and
+            shipper_phone == recipient_phone and
+            shipper_address == recipient_address):
             raise serializers.ValidationError({
-                'recipient': 'El destinatario no puede ser el mismo que el remitente (mismo nombre y teléfono).'
+                'recipient': 'Los datos del remitente y destinatario son idénticos. Verifique que no sea un error de copia.'
             })
         
         return data
@@ -368,6 +379,7 @@ class CitySerializer(serializers.Serializer):
 class ServiceAreaSerializer(serializers.Serializer):
     """Serializer para áreas de servicio"""
     service_area = serializers.CharField(max_length=10)
+    display_name = serializers.CharField(max_length=180, required=False, allow_blank=True)
 
 
 class PostalCodeSerializer(serializers.Serializer):

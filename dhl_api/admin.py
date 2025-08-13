@@ -1,5 +1,6 @@
 from django.contrib import admin
 from .models import Shipment, TrackingEvent, RateQuote, EPODDocument, UserActivity, Contact, ServiceZone
+from .models import ServiceAreaCityMap
 
 
 @admin.register(Shipment)
@@ -212,6 +213,15 @@ class ServiceZoneAdmin(admin.ModelAdmin):
         
         return response
     export_selected_zones.short_description = "Exportar zonas seleccionadas a CSV"
+
+
+@admin.register(ServiceAreaCityMap)
+class ServiceAreaCityMapAdmin(admin.ModelAdmin):
+    list_display = ('country_code', 'state_code', 'service_area', 'city_name', 'display_name', 'postal_code_from', 'postal_code_to', 'updated_at')
+    list_filter = ('country_code', 'state_code', 'service_area')
+    search_fields = ('country_code', 'state_code', 'service_area', 'city_name', 'display_name')
+    ordering = ('country_code', 'state_code', 'service_area', 'city_name')
+    readonly_fields = ('created_at', 'updated_at')
 
 
 # Configuración del sitio admin

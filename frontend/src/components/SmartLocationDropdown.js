@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import serviceZoneService from '../services/serviceZoneService';
+import { normalizeCityName } from '../utils/dhlValidations';
 
 /**
  * Dropdown inteligente de ubicaciones con buscadores avanzados y cache optimizado
@@ -16,6 +17,7 @@ const SmartLocationDropdown = ({
   const [countries, setCountries] = useState([]);
   const [states, setStates] = useState([]);
   const [cities, setCities] = useState([]);
+  const [serviceAreas, setServiceAreas] = useState([]);
   const [postalCodes, setPostalCodes] = useState([]);
   
   // Estados de cache y optimización
@@ -23,6 +25,7 @@ const SmartLocationDropdown = ({
     countries: false,
     states: false,
     cities: false,
+    serviceAreas: false,
     postalCodes: false,
     countryAnalysis: false
   });
@@ -32,6 +35,7 @@ const SmartLocationDropdown = ({
     countries: false,
     states: false,
     cities: false,
+    serviceAreas: false,
     postalCodes: false,
     countryAnalysis: false
   });
@@ -40,6 +44,7 @@ const SmartLocationDropdown = ({
   const [countrySearch, setCountrySearch] = useState('');
   const [stateSearch, setStateSearch] = useState('');
   const [citySearch, setCitySearch] = useState('');
+  const [serviceAreaSearch, setServiceAreaSearch] = useState('');
   const [postalSearch, setPostalSearch] = useState('');
   
   // Estados de dropdowns abiertos
@@ -183,6 +188,36 @@ const SmartLocationDropdown = ({
   }, []);
 
   /**
+   * Cargar áreas de servicio del país con cache optimizado
+   */
+  const loadServiceAreas = useCallback(async (countryCode) => {
+    // Evitar cargas duplicadas
+    if (loadingRef.current.serviceAreas) return;
+    
+    try {
+      setLoadingStates(prev => ({ ...prev, serviceAreas: true }));
+      loadingRef.current.serviceAreas = true;
+      
+      const result = await serviceZoneService.getServiceAreas(countryCode);
+      if (result.success) {
+        // Transformar usando los nombres amigables y únicos provistos por el servicio
+        const transformedAreas = result.data.map(area => ({
+          code: area.service_area,
+          name: area.service_area,
+          display_name: area.display_name || area.service_area
+        }));
+        setServiceAreas(transformedAreas);
+      }
+    } catch (error) {
+      console.error('Error cargando áreas de servicio:', error);
+      setServiceAreas([]);
+    } finally {
+      setLoadingStates(prev => ({ ...prev, serviceAreas: false }));
+      loadingRef.current.serviceAreas = false;
+    }
+  }, []);
+
+  /**
    * Cargar códigos postales con filtros optimizado y manejo de países grandes
    */
   const loadPostalCodes = useCallback(async (filters) => {
@@ -285,17 +320,41 @@ const SmartLocationDropdown = ({
     }
   }, [value.country, value.state, countryInfo.hasCities, countryInfo.hasStates, loadCities]);
 
-  // Cargar códigos postales cuando cambia país/estado/ciudad (con manejo inteligente de países grandes)
+  // Cargar ciudades o áreas de servicio según la estructura del país
+  useEffect(() => {
+    // Si no hay país, limpiar y salir
+    if (!value.country) {
+      setServiceAreas([]);
+      return;
+    }
+
+    // Solo gestionar áreas de servicio aquí.
+    // La carga de ciudades ya la maneja el efecto anterior que depende de country/state.
+    const useServiceAreas =
+      countryInfo.dataStructure?.service_area_available === true &&
+      countryInfo.dataStructure?.recommended_city_field === 'service_area';
+
+    if (useServiceAreas) {
+      loadServiceAreas(value.country);
+    }
+  }, [
+    value.country,
+    countryInfo.dataStructure?.service_area_available,
+    countryInfo.dataStructure?.recommended_city_field,
+    loadServiceAreas
+  ]);
+
+  // Cargar códigos postales cuando cambia país/estado/ciudad/área de servicio (con manejo inteligente de países grandes)
   useEffect(() => {
     if (value.country && countryInfo.hasPostalCodes) {
       const filters = { country: value.country };
       
-      // Para países grandes, requerir al menos estado o ciudad
+      // Para países grandes, requerir al menos estado, ciudad o área de servicio
       const LARGE_COUNTRIES = ['CA', 'US', 'GB', 'DE', 'FR', 'AU', 'IN'];
       const isLargeCountry = LARGE_COUNTRIES.includes(value.country?.toUpperCase());
       
       // Si es un país grande y no tiene filtros específicos, no cargar automáticamente
-      if (isLargeCountry && !value.state && !value.city && !countryInfo.requiresFiltersForPostalCodes) {
+      if (isLargeCountry && !value.state && !value.city && !value.serviceArea && !countryInfo.requiresFiltersForPostalCodes) {
         // Simular una carga para mostrar el mensaje de filtros requeridos
         loadPostalCodes(filters);
         return;
@@ -304,23 +363,24 @@ const SmartLocationDropdown = ({
       // Si tiene filtros específicos o no es país grande, cargar normalmente
       if (value.state) filters.state = value.state;
       if (value.city) filters.city = value.city;
+      if (value.serviceArea) filters.serviceArea = value.serviceArea;
       
       // Solo cargar si tenemos filtros suficientes o no es país grande
-      if (!isLargeCountry || value.state || value.city) {
+      if (!isLargeCountry || value.state || value.city || value.serviceArea) {
         loadPostalCodes(filters);
       } else {
         // Para países grandes sin filtros, limpiar códigos postales
         setPostalCodes({
           success: false,
           requiresFilters: true,
-          message: `Para ${value.country?.toUpperCase()}, seleccione provincia/estado o ciudad para ver códigos postales`,
+          message: `Para ${value.country?.toUpperCase()}, seleccione provincia/estado, ciudad o área de servicio para ver códigos postales`,
           data: []
         });
       }
     } else {
       setPostalCodes([]);
     }
-  }, [value.country, value.state, value.city, countryInfo.hasPostalCodes, countryInfo.requiresFiltersForPostalCodes, loadPostalCodes]);
+  }, [value.country, value.state, value.city, value.serviceArea, countryInfo.hasPostalCodes, countryInfo.requiresFiltersForPostalCodes, loadPostalCodes]);
 
   /**
    * Filtrar opciones por búsqueda
@@ -345,9 +405,13 @@ const SmartLocationDropdown = ({
     filterOptions(cities, citySearch, 'display_name'), 
     [cities, citySearch]
   );
+  // Simplificado para debug - bypass useMemo temporalmente
+  const filteredServiceAreas = (serviceAreas && serviceAreas.length > 0) 
+    ? serviceAreas 
+    : (postalCodes.availableServiceAreas || []).map(area => ({ code: area, name: area, display_name: area }));
   const filteredPostalCodes = useMemo(() => 
-    filterOptions(postalCodes, postalSearch, 'display_range'), 
-    [postalCodes, postalSearch]
+    filterOptions(postalCodes.data || [], postalSearch, 'display_range'), 
+    [postalCodes.data, postalSearch]
   );
 
   /**
@@ -361,7 +425,9 @@ const SmartLocationDropdown = ({
       stateName: '',
       city: '',
       cityName: '',
-      postalCode: '',
+      serviceArea: '',
+      serviceAreaName: '',
+      postalCode: '0', // Valor por defecto para países sin códigos postales
       postalCodeRange: ''
     };
     onChange(newValue);
@@ -379,6 +445,8 @@ const SmartLocationDropdown = ({
       stateName: state.state_name,
       city: '',
       cityName: '',
+      serviceArea: '',
+      serviceAreaName: '',
       postalCode: '',
       postalCodeRange: ''
     };
@@ -391,11 +459,16 @@ const SmartLocationDropdown = ({
    * Manejar selección de ciudad
    */
   const handleCitySelect = (city) => {
+    // Usar nombre amigable sin sufijos de código (" - CODE")
+  const rawCityName = city.display_name || city.name || '';
+  const friendlyCity = normalizeCityName(rawCityName);
     const newValue = {
       ...value,
-      city: city.code || city.name,
-      cityName: city.display_name || city.name,
-      postalCode: '',
+      city: friendlyCity,
+      cityName: friendlyCity,
+      serviceArea: '',
+      serviceAreaName: '',
+      postalCode: value.postalCode || '0', // Mantener código postal existente o usar '0'
       postalCodeRange: ''
     };
     onChange(newValue);
@@ -404,7 +477,7 @@ const SmartLocationDropdown = ({
   };
 
   /**
-   * Manejar selección de código postal
+   * Manejar selección de código postal con fallback inteligente
    */
   const handlePostalCodeSelect = (postalCode) => {
     const newValue = {
@@ -412,6 +485,21 @@ const SmartLocationDropdown = ({
       postalCode: postalCode.postal_code_from,
       postalCodeRange: postalCode.display_range
     };
+
+    // Si hay service area y no hay ciudad ya seleccionada, usar service area como ciudad
+        if (postalCode.service_area && !value.city) {
+      const saCode = String(postalCode.service_area).toUpperCase();
+      // Intentar resolver nombre amigable desde serviceAreas cargadas
+          const match = (serviceAreas || []).find(sa => (sa.code || sa.service_area) === saCode);
+          // Quitar sufijo " - CODE" si existe
+          const rawFriendly = match?.display_name || saCode;
+          const friendly = normalizeCityName(rawFriendly);
+      newValue.city = friendly;
+      newValue.cityName = friendly;
+      newValue.serviceArea = saCode;
+      newValue.serviceAreaName = saCode;
+    }
+
     onChange(newValue);
     setOpenDropdown(null);
     setPostalSearch('');
@@ -477,7 +565,7 @@ const SmartLocationDropdown = ({
                     onClick={() => onSelect(option)}
                     className="w-full p-2 text-left hover:bg-blue-50 focus:bg-blue-100 focus:outline-none"
                   >
-                    {option[displayKey]}
+                    {option[displayKey] || `[${displayKey} missing]`}
                   </button>
                 ))
               ) : (
@@ -524,125 +612,93 @@ const SmartLocationDropdown = ({
         )}
       </div>
 
-      {/* Estado (solo si el país tiene estados) */}
-      {countryInfo.hasStates && value.country && (
+  {/* Ciudad (usa áreas de servicio internamente cuando aplica, pero la UI muestra 'Ciudad') */}
+      {value.country && (
         <div className="dropdown-container">
           <label className="block text-sm font-medium text-gray-700 mb-1">
-            Estado/Provincia
+    Ciudad
+            <span className="text-xs text-gray-500 ml-2">(Requerido para códigos postales)</span>
           </label>
-          {renderSearchDropdown(
-            openDropdown === 'state',
-            () => setOpenDropdown(openDropdown === 'state' ? null : 'state'),
-            value.stateName || 'Selecciona un estado...',
-            stateSearch,
-            setStateSearch,
-            filteredStates,
-            handleStateSelect,
-            'state_name',
-            'states'
-          )}
+          {(() => {
+            // Determinar qué datos usar según la estructura del país
+            const useServiceAreas = countryInfo.dataStructure?.recommended_city_field === 'service_area';
+            const options = useServiceAreas ? filteredServiceAreas : filteredCities;
+            const searchValue = useServiceAreas ? serviceAreaSearch : citySearch;
+            const setSearchValue = useServiceAreas ? setServiceAreaSearch : setCitySearch;
+    const placeholder = useServiceAreas 
+      ? (loadingStates.serviceAreas ? 'Cargando ciudades...' : value.cityName || 'Selecciona una ciudad...')
+      : (loadingStates.cities ? 'Cargando ciudades...' : value.cityName || 'Selecciona una ciudad...');
+            
+            const handleSelect = useServiceAreas 
+              ? (item) => {
+                  // Quitar sufijo " - CODE" si existe para usar solo el nombre
+                  const rawFriendly = item.display_name || item.name || item.code;
+                  const friendly = normalizeCityName(rawFriendly);
+                  const newValue = {
+                    ...value,
+                    serviceArea: item.code,
+                    serviceAreaName: item.name,
+                    city: friendly, // Mostrar ciudad amigable en la UI
+                    cityName: friendly,
+                    postalCode: '',
+                    postalCodeRange: ''
+                  };
+                  onChange(newValue);
+                  setOpenDropdown(null);
+                  // Cargar códigos postales
+                  if (value.country) {
+                    loadPostalCodes({
+                      country: value.country,
+                      serviceArea: item.code
+                    });
+                  }
+                }
+              : (item) => {
+                  const newValue = {
+                    ...value,
+                    city: item.code || item.name,
+                    cityName: item.display_name || item.name,
+                    serviceArea: '',
+                    serviceAreaName: '',
+                    postalCode: '',
+                    postalCodeRange: ''
+                  };
+                  onChange(newValue);
+                  setOpenDropdown(null);
+                  setCitySearch('');
+                };
+
+            return renderSearchDropdown(
+              openDropdown === 'city',
+              () => setOpenDropdown(openDropdown === 'city' ? null : 'city'),
+              placeholder,
+              searchValue,
+              setSearchValue,
+              options,
+              handleSelect,
+              'display_name'
+            );
+          })()}
         </div>
       )}
 
-      {/* Ciudad (solo si el país tiene ciudades) */}
-      {countryInfo.hasCities && value.country && (
-        <div className="dropdown-container">
-          <label className="block text-sm font-medium text-gray-700 mb-1">
-            Ciudad
-          </label>
-          {renderSearchDropdown(
-            openDropdown === 'city',
-            () => setOpenDropdown(openDropdown === 'city' ? null : 'city'),
-            value.cityName || 'Selecciona una ciudad...',
-            citySearch,
-            setCitySearch,
-            filteredCities,
-            handleCitySelect,
-            'display_name',
-            'cities'
-          )}
-        </div>
-      )}
-
-      {/* Código Postal (solo si el país tiene códigos postales) */}
-      {countryInfo.hasPostalCodes && value.country && (
+      {/* Código Postal */}
+      {countryInfo.hasPostalCodes && value.country && (value.serviceArea || value.city) && (
         <div className="dropdown-container">
           <label className="block text-sm font-medium text-gray-700 mb-1">
             Código Postal
           </label>
           
-          {/* Mostrar mensaje informativo para países grandes que requieren filtros */}
-          {postalCodes.requiresFilters && !value.state && !value.city ? (
-            <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg">
-              <div className="flex items-start space-x-2">
-                <svg className="w-5 h-5 text-blue-500 mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
-                  <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
-                </svg>
-                <div className="flex-1">
-                  <p className="text-sm text-blue-800 font-medium">
-                    Filtros requeridos para códigos postales
-                  </p>
-                  <p className="text-sm text-blue-600 mt-1">
-                    {postalCodes.message || `Para ${value.country?.toUpperCase()}, seleccione provincia/estado o ciudad para ver códigos postales disponibles.`}
-                  </p>
-                  
-                  {/* Mostrar estados disponibles */}
-                  {postalCodes.availableStates && postalCodes.availableStates.length > 0 && (
-                    <p className="text-xs text-blue-500 mt-2">
-                      <strong>Provincias disponibles:</strong> {postalCodes.availableStates.slice(0, 8).join(', ')}{postalCodes.availableStates.length > 8 ? '...' : ''}
-                    </p>
-                  )}
-                  
-                  {/* Mostrar ciudades disponibles si no hay estados */}
-                  {postalCodes.availableCities && postalCodes.availableCities.length > 0 && (
-                    <p className="text-xs text-blue-500 mt-2">
-                      <strong>Ciudades disponibles:</strong> {postalCodes.availableCities.slice(0, 6).join(', ')}{postalCodes.availableCities.length > 6 ? '...' : ''}
-                    </p>
-                  )}
-                  
-                  {/* Mostrar áreas de servicio disponibles si no hay estados ni ciudades */}
-                  {postalCodes.availableServiceAreas && postalCodes.availableServiceAreas.length > 0 && (
-                    <p className="text-xs text-blue-500 mt-2">
-                      <strong>Áreas de servicio disponibles:</strong> {postalCodes.availableServiceAreas.slice(0, 8).join(', ')}{postalCodes.availableServiceAreas.length > 8 ? '...' : ''}
-                    </p>
-                  )}
-                  
-                  {/* Mostrar recomendación especial */}
-                  {postalCodes.recommendations?.use_service_area_filter && (
-                    <div className="mt-2 p-2 bg-green-50 border border-green-200 rounded text-xs">
-                      <p className="text-green-800">
-                        🏢 <strong>Sugerencia:</strong> {postalCodes.recommendations.message}
-                      </p>
-                      <p className="text-green-700 mt-1">
-                        Ejemplo: <code className="bg-green-100 px-1 rounded">?service_area=YVR</code> para Vancouver
-                      </p>
-                    </div>
-                  )}
-                  
-                  {/* Mostrar recomendación especial para ciudades */}
-                  {postalCodes.recommendations?.use_city_filter && (
-                    <div className="mt-2 p-2 bg-amber-50 border border-amber-200 rounded text-xs">
-                      <p className="text-amber-800">
-                        💡 <strong>Recomendación:</strong> {postalCodes.recommendations.message}
-                      </p>
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-          ) : (
-            // Dropdown normal para códigos postales
-            renderSearchDropdown(
-              openDropdown === 'postal',
-              () => setOpenDropdown(openDropdown === 'postal' ? null : 'postal'),
-              value.postalCodeRange || 'Selecciona código postal...',
-              postalSearch,
-              setPostalSearch,
-              filteredPostalCodes,
-              handlePostalCodeSelect,
-              'display_range',
-              'postalCodes'
-            )
+          {renderSearchDropdown(
+            openDropdown === 'postal',
+            () => setOpenDropdown(openDropdown === 'postal' ? null : 'postal'),
+            value.postalCodeRange || 'Selecciona código postal...',
+            postalSearch,
+            setPostalSearch,
+            filteredPostalCodes,
+            handlePostalCodeSelect,
+            'display_range',
+            'postalCodes'
           )}
         </div>
       )}

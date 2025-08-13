@@ -18,7 +18,7 @@ const EpodTab = ({
   resetEpodState
 }) => {
   // ✅ Usar hook de validación para epod
-  const validation = useFormValidation({ tracking_number: epodTrackingNumber }, 'epod');
+  const validation = useFormValidation({ shipment_id: epodTrackingNumber }, 'epod');
 
   // ✅ Manejar envío con validación
   const handleSubmit = () => {
@@ -49,7 +49,7 @@ const EpodTab = ({
               type="text"
               value={epodTrackingNumber}
               onChange={(e) => setEpodTrackingNumber(e.target.value)}
-              className={validation.getFieldClass('tracking_number', 'flex-1 px-3 py-2 rounded-md focus:outline-none focus:ring-2')}
+              className={validation.getFieldClass('shipment_id', 'flex-1 px-3 py-2 rounded-md focus:outline-none focus:ring-2')}
               placeholder="Ej: 1234567890"
               onKeyPress={(e) => e.key === 'Enter' && handleSubmit()}
             />
@@ -67,13 +67,13 @@ const EpodTab = ({
             </button>
           </div>
 
-          {/* Estado de validación */}
-          {!validation.isValid && (
+          {/* Estado de validación - Comentado para ePOD */}
+          {/* {!validation.isValid && (
             <FormValidationStatus
               isValid={validation.isValid}
               className="mt-4"
             />
-          )}
+          )} */}
           <p className="text-sm text-gray-500 mt-1">
             ⚠️ El ePOD solo está disponible para envíos que ya han sido entregados.
           </p>

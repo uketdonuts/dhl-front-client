@@ -56,21 +56,6 @@ services:
     stdin_open: true
     tty: true
 
-  # Nginx reverse proxy
-  nginx:
-    image: nginx:alpine
-    container_name: dhl-nginx-proxy
-    ports:
-      - "80:80"
-    volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./staticfiles:/var/www/static:ro
-      - ./media:/var/www/media:ro
-    depends_on:
-      - backend
-      - frontend
-    restart: unless-stopped
-
   # PostgreSQL para desarrollo local (opcional)
   postgres:
     image: postgres:13-alpine

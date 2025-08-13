@@ -11,7 +11,9 @@ import NumericInput from '../NumericInput';
 const ShipmentTab = ({
   shipmentData,
   updateShipper,
+  updateShipperBulk,
   updateRecipient,
+  updateRecipientBulk,
   updatePackage,
   openContactModal,
   handleCreateShipment,
@@ -29,7 +31,8 @@ const ShipmentTab = ({
     city: shipmentData.shipper.city || '',
     cityName: shipmentData.shipper.city || '',
     postalCode: shipmentData.shipper.postalCode || '',
-    postalCodeRange: ''
+    postalCodeRange: '',
+  serviceArea: shipmentData.shipper.serviceArea || ''
   });
 
   const [recipientLocation, setRecipientLocation] = useState({
@@ -40,59 +43,127 @@ const ShipmentTab = ({
     city: shipmentData.recipient.city || '',
     cityName: shipmentData.recipient.city || '',
     postalCode: shipmentData.recipient.postalCode || '',
-    postalCodeRange: ''
+    postalCodeRange: '',
+  serviceArea: shipmentData.recipient.serviceArea || ''
   });
 
-  // Sincronizar estados locales cuando cambia shipmentData (desde cotización)
+  // Sincronizar estados locales cuando cambia shipmentData (desde cotización) - Optimizado
   useEffect(() => {
     console.log('🔄 SINCRONIZANDO SHIPPER LOCATION:', shipmentData.shipper);
-    setShipperLocation({
-      country: shipmentData.shipper.country || '',
-      countryName: shipmentData.shipper.countryName || '',
-      state: shipmentData.shipper.state || '',
-      stateName: '',
-      city: shipmentData.shipper.city || '',
-      cityName: shipmentData.shipper.city || '',
-      postalCode: shipmentData.shipper.postalCode || '',
-      postalCodeRange: ''
+    console.log('🔍 Datos de ubicación preservados:', shipmentData._locationData);
+    
+    const preservedOrigin = shipmentData._locationData?.origin;
+    setShipperLocation(prev => {
+      // Construir nuevo valor preservando campos locales si props vienen vacías
+      const nextLoc = {
+        country: preservedOrigin?.country || shipmentData.shipper.country || prev.country || '',
+        countryName: preservedOrigin?.countryName || shipmentData.shipper.countryName || prev.countryName || '',
+        state: preservedOrigin?.state || shipmentData.shipper.state || prev.state || '',
+        stateName: preservedOrigin?.stateName || shipmentData.shipper.stateName || prev.stateName || '',
+        city: preservedOrigin?.cityName || preservedOrigin?.city || shipmentData.shipper.city || prev.city || '',
+        cityName: preservedOrigin?.cityName || preservedOrigin?.city || shipmentData.shipper.city || prev.cityName || '',
+        postalCode: preservedOrigin?.postalCode || shipmentData.shipper.postalCode || prev.postalCode || '',
+        postalCodeRange: preservedOrigin?.postalCodeRange || shipmentData.shipper.postalCodeRange || prev.postalCodeRange || '',
+        serviceArea: preservedOrigin?.serviceArea || shipmentData.shipper.serviceArea || prev.serviceArea || ''
+      };
+      const hasChanges = (
+        prev.country !== nextLoc.country ||
+        prev.state !== nextLoc.state ||
+        prev.city !== nextLoc.city ||
+        prev.postalCode !== nextLoc.postalCode ||
+        prev.countryName !== nextLoc.countryName ||
+        prev.stateName !== nextLoc.stateName ||
+        prev.serviceArea !== nextLoc.serviceArea
+      );
+      if (hasChanges) {
+        console.log('✅ Actualizando shipper location:', nextLoc);
+      }
+      return hasChanges ? nextLoc : prev;
     });
-  }, [shipmentData.shipper.country, shipmentData.shipper.state, shipmentData.shipper.city, shipmentData.shipper.postalCode]);
+  }, [
+    shipmentData.shipper.country,
+    shipmentData.shipper.state, 
+    shipmentData.shipper.city,
+    shipmentData.shipper.postalCode,
+    shipmentData.shipper.countryName,
+    shipmentData.shipper.stateName,
+  shipmentData.shipper.serviceArea,
+    shipmentData._locationData?.origin
+  ]);
 
   useEffect(() => {
     console.log('🔄 SINCRONIZANDO RECIPIENT LOCATION:', shipmentData.recipient);
-    setRecipientLocation({
-      country: shipmentData.recipient.country || '',
-      countryName: shipmentData.recipient.countryName || '',
-      state: shipmentData.recipient.state || '',
-      stateName: '',
-      city: shipmentData.recipient.city || '',
-      cityName: shipmentData.recipient.city || '',
-      postalCode: shipmentData.recipient.postalCode || '',
-      postalCodeRange: ''
+    console.log('🔍 Datos de ubicación preservados (destino):', shipmentData._locationData);
+    
+    const preservedDestination = shipmentData._locationData?.destination;
+    setRecipientLocation(prev => {
+      const nextLoc = {
+        country: preservedDestination?.country || shipmentData.recipient.country || prev.country || '',
+        countryName: preservedDestination?.countryName || shipmentData.recipient.countryName || prev.countryName || '',
+        state: preservedDestination?.state || shipmentData.recipient.state || prev.state || '',
+        stateName: preservedDestination?.stateName || shipmentData.recipient.stateName || prev.stateName || '',
+        city: preservedDestination?.cityName || preservedDestination?.city || shipmentData.recipient.city || prev.city || '',
+        cityName: preservedDestination?.cityName || preservedDestination?.city || shipmentData.recipient.city || prev.cityName || '',
+        postalCode: preservedDestination?.postalCode || shipmentData.recipient.postalCode || prev.postalCode || '',
+        postalCodeRange: preservedDestination?.postalCodeRange || shipmentData.recipient.postalCodeRange || prev.postalCodeRange || '',
+        serviceArea: preservedDestination?.serviceArea || shipmentData.recipient.serviceArea || prev.serviceArea || ''
+      };
+      const hasChanges = (
+        prev.country !== nextLoc.country ||
+        prev.state !== nextLoc.state ||
+        prev.city !== nextLoc.city ||
+        prev.postalCode !== nextLoc.postalCode ||
+        prev.countryName !== nextLoc.countryName ||
+        prev.stateName !== nextLoc.stateName ||
+        prev.serviceArea !== nextLoc.serviceArea
+      );
+      if (hasChanges) {
+        console.log('✅ Actualizando recipient location:', nextLoc);
+      }
+      return hasChanges ? nextLoc : prev;
     });
-  }, [shipmentData.recipient.country, shipmentData.recipient.state, shipmentData.recipient.city, shipmentData.recipient.postalCode]);
+  }, [
+    shipmentData.recipient.country,
+    shipmentData.recipient.state,
+    shipmentData.recipient.city,
+    shipmentData.recipient.postalCode,
+    shipmentData.recipient.countryName,
+    shipmentData.recipient.stateName,
+  shipmentData.recipient.serviceArea,
+    shipmentData._locationData?.destination
+  ]);
 
   // Manejar cambios en ubicación del remitente
   const handleShipperLocationChange = useCallback((location) => {
+    console.log('📍 ACTUALIZANDO SHIPPER LOCATION:', location);
+    
+    // Actualizar estado local inmediatamente para UI responsiva
     setShipperLocation(location);
     
-    // Actualizar datos del remitente
-    updateShipper('country', location.country || '');
-    updateShipper('state', location.state || '');
-    updateShipper('city', location.city || '');
-    updateShipper('postalCode', location.postalCode || '');
-  }, [updateShipper]);
+    // Usar función bulk para una sola actualización del estado global
+    updateShipperBulk({
+      country: location.country || '',
+      state: location.state || '',
+      city: location.cityName || location.city || '',
+      postalCode: location.postalCode || ''
+    });
+  }, [updateShipperBulk]);
 
   // Manejar cambios en ubicación del destinatario
   const handleRecipientLocationChange = useCallback((location) => {
+    console.log('📍 ACTUALIZANDO RECIPIENT LOCATION:', location);
+    
+    // Actualizar estado local inmediatamente para UI responsiva
     setRecipientLocation(location);
     
-    // Actualizar datos del destinatario
-    updateRecipient('country', location.country || '');
-    updateRecipient('state', location.state || '');
-    updateRecipient('city', location.city || '');
-    updateRecipient('postalCode', location.postalCode || '');
-  }, [updateRecipient]);
+    // Usar función bulk para una sola actualización del estado global
+    updateRecipientBulk({
+      country: location.country || '',
+      state: location.state || '',
+      city: location.cityName || location.city || '',
+      postalCode: location.postalCode || ''
+    });
+  }, [updateRecipientBulk]);
 
   // ✅ Hook de validación para shipment
   const validation = useFormValidation(shipmentData, 'shipment');
@@ -520,7 +591,7 @@ const ShipmentTab = ({
         </div>
       </div>
 
-      {/* Mostrar errores de envío */}
+      {/* Mostrar errores de envío mejorados */}
       {shipmentError && (
         <div className="bg-red-50 border border-red-200 rounded-md p-4">
           <div className="flex">
@@ -529,10 +600,11 @@ const ShipmentTab = ({
                 <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
               </svg>
             </div>
-            <div className="ml-3">
+            <div className="ml-3 w-full">
               <h3 className="text-sm font-medium text-red-800">Error al crear envío</h3>
               <div className="mt-2 text-sm text-red-700">
-                <p>{shipmentError}</p>
+                {/* Mostrar mensaje genérico para todos los errores */}
+                <div className="whitespace-pre-wrap">Ha ocurrido un error</div>
               </div>
             </div>
           </div>
@@ -645,7 +717,9 @@ const ShipmentTab = ({
 ShipmentTab.propTypes = {
   shipmentData: PropTypes.object.isRequired,
   updateShipper: PropTypes.func.isRequired,
+  updateShipperBulk: PropTypes.func.isRequired,
   updateRecipient: PropTypes.func.isRequired,
+  updateRecipientBulk: PropTypes.func.isRequired,
   updatePackage: PropTypes.func.isRequired,
   openContactModal: PropTypes.func.isRequired,
   handleCreateShipment: PropTypes.func.isRequired,

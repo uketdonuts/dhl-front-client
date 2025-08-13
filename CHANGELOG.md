@@ -1,6 +1,33 @@
 # ### Fixed
 ## [Unreleased]
 ### Fixed
+- Payloads: eliminado duplicado de campos postal_code/postalCode y service_area/ServiceArea en requests
+  - Rate: se mantiene postal_code (snake_case) y se eliminan alias redundantes
+  - Shipment: se mantiene postalCode (camelCase) y se eliminan alias redundantes
+- Payloads: eliminado envío del campo service_area/ServiceArea en todas las solicitudes (Rate, Shipment, Landed Cost) por requerimiento
+- SmartLocationDropdown: corrección menor de typo en variable memoizada de códigos postales
+- SmartLocationDropdown: evitado bucle de renderizado (Maximum update depth exceeded) eliminando doble carga de ciudades y afinando dependencias del useEffect que gestionaba ciudades/áreas de servicio; ahora solo dispara carga de áreas de servicio cuando corresponde
+- LandedCostTab/useFormValidation: el warning de profundidad máxima provenía del ciclo indirecto iniciado por SmartLocationDropdown; tras el ajuste anterior el formulario deja de re-renderizar en bucle durante selección de ubicaciones
+- SmartLocationDropdown: eliminado error de build/linter por redeclaración de variable (const friendly)
+- Crear Envío: corregido bucle de reinicio en los dropdowns de ubicación (SmartLocationDropdown) que impedía seleccionar país/ciudad. Ahora el estado local se preserva y se ignoran props entrantes vacías para evitar sobrescrituras innecesarias
+### Changed
+- SmartLocationDropdown: al seleccionar ciudad o área de servicio ahora se usa exclusivamente el nombre amigable (display_name) como city/cityName; se elimina cualquier sufijo " - CODE" para evitar concatenaciones (p. ej., "GOLDEN" en lugar de "GOLDEN - YLW")
+- Normalización de ubicaciones en todos los requests: Country y City en mayúsculas; postal_code compacto sin espacios/guiones (ej: CA T6T1Y9). Aplicado a Rate y Landed Cost; Shipment normaliza shipper/recipient antes de enviar
+
+- Added: ServiceAreaCityMap model to map DHL service_area codes to friendly city display names per country.
+- Added: Management command `load_service_area_map` to import mappings from CSV/JSON with upsert support.
+- Added: API endpoint `GET /api/service-zones/resolve-display/` to resolve display names for UI.
+### Changed
+- **UI/UX: Formulario tracking y ePOD**: Removido mensaje de validación "Formulario incompleto - Completa todos los campos marcados con * para continuar" en las pestañas de tracking y ePOD para mejorar la experiencia del usuario en estas secciones simples
+
+### Fixed
+- **🚨 CRÍTICO: Códigos HTTP incorrectos para errores DHL**: Corregido problema donde errores del API DHL (como error 8009) se retornaban con HTTP 200, causando que el frontend mostrara "Envío Creado con Éxito" para errores reales. Ahora se retornan códigos apropiados (400/422) para errores DHL
+- **🎯 RESUELTO: Manejo de respuestas error en frontend**: Corregido problema en `handleCreateShipment` donde solo se verificaba status HTTP sin considerar el campo `success`. Ahora se verifica `response.data.success` antes de mostrar mensaje de éxito
+- **🎯 MEJORADO: Manejo de errores DHL específicos**: Implementado manejo especializado para error DHL 8009 (país de facturación vs país de origen) con explicaciones detalladas y soluciones específicas para configuración de cuentas Impex
+- **🔧 RESUELTO: Validación excesivamente estricta en envíos**: Corregido problema donde el sistema rechazaba envíos con mismo email entre remitente y destinatario. Ahora solo prohíbe datos completamente idénticos (nombre, email, teléfono Y dirección), permitiendo casos legítimos como envíos inter-oficina
+- **🔧 RESUELTO: Re-renderizado innecesario en formulario envíos**: Corregido problema donde seleccionar país en remitente causaba reinicio del componente destinatario. Optimizado con funciones bulk (`updateShipperBulk`, `updateRecipientBulk`) y `useEffect` con comparación de cambios reales para evitar re-renderizados innecesarios
+- **🔧 RESUELTO: Validación backend formulario envíos**: Corregido problema en backend donde la validación de completitud esperaba estructura de datos antigua (`origin.city`, `dimensions.length`) en lugar de la nueva estructura (`shipper.city`, `package.length`). Actualizada función `validate_form_completeness` en views.py
+- **🔧 RESUELTO: Validación frontend formulario envíos**: Corregido problema donde el formulario de envíos mostraba "Complete 14 campo(s) para continuar" aunque todos los campos estuvieran llenos. Error estaba en configuración incorrecta de rutas de campos requeridos y dependencias de `useMemo` en hook de validación
 - **✅ Postal Code en Landing Cost**: Corregido error donde `origin.postal_code` se requería como obligatorio en el validador de landing cost. Ahora usa "0" como valor por defecto cuando está vacío, igual que el endpoint de cotizaciones (rate)
 - **🔧 Peso declarado en cotizaciones**: Corregido error donde `declared_weight` permanecía en 0 mientras `weight` se actualizaba, causando validación fallida en API
 - **⚖️ Sincronización de peso**: La función `updateRateData` ahora sincroniza automáticamente `declared_weight` con `weight` cuando el usuario ingresa el peso

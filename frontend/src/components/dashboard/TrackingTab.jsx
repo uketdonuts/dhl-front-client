@@ -71,13 +71,13 @@ const TrackingTab = ({
             </div>
           </div>
 
-          {/* Estado de validación */}
-          {!validation.isValid && (
+          {/* Estado de validación - Comentado para tracking */}
+          {/* {!validation.isValid && (
             <FormValidationStatus
               isValid={validation.isValid}
               className="mt-4"
             />
-          )}
+          )} */}
         </div>
 
         {/* Mostrar errores de tracking */}

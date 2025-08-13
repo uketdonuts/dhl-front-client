@@ -53,10 +53,10 @@ const ActivityHistoryTab = () => {
                 setPagination(data.data.pagination);
                 setFilterOptions(data.data.filters);
             } else {
-                setError(data.message || 'Error al cargar las actividades');
+                setError('Ha ocurrido un error');
             }
         } catch (err) {
-            setError('Error de conexión');
+            setError('Ha ocurrido un error');
             console.error('Error:', err);
         } finally {
             setLoading(false);
@@ -149,6 +149,30 @@ const ActivityHistoryTab = () => {
             system_action: '⚙️'
         };
         return icons[action] || '📋';
+    };
+
+    // Helper: pretty print JSON safely, truncated
+    const JsonPreview = ({ data, maxLength = 1200 }) => {
+        if (!data) return null;
+        let json = '';
+        try {
+            json = JSON.stringify(data, null, 2);
+        } catch (_) {
+            json = String(data);
+        }
+        const isLong = json.length > maxLength;
+        const [expanded, setExpanded] = useState(false);
+        const shown = expanded || !isLong ? json : json.slice(0, maxLength) + '...';
+        return (
+            <div className="mt-2 bg-gray-50 rounded border border-gray-200 text-xs font-mono whitespace-pre-wrap break-all p-3">
+                {shown}
+                {isLong && (
+                    <button onClick={() => setExpanded(!expanded)} className="ml-2 text-blue-600 hover:underline">
+                        {expanded ? 'Ver menos' : 'Ver más'}
+                    </button>
+                )}
+            </div>
+        );
     };
 
     return (
@@ -350,6 +374,30 @@ const ActivityHistoryTab = () => {
                                                             <span>Recurso: {activity.resource_type}</span>
                                                         )}
                                                     </div>
+
+                                                    {/* Payloads */}
+                                                    {activity.metadata && (activity.metadata.request_payload || activity.metadata.response_payload) && (
+                                                        <div className="mt-3 space-y-2">
+                                                            {activity.metadata.request_payload && (
+                                                                <div>
+                                                                    <div className="text-xs font-semibold text-gray-700">Request</div>
+                                                                    <JsonPreview data={activity.metadata.request_payload} />
+                                                                </div>
+                                                            )}
+                                                            {activity.metadata.response_payload && (
+                                                                <div>
+                                                                    <div className="text-xs font-semibold text-gray-700">Response</div>
+                                                                    <JsonPreview data={activity.metadata.response_payload} />
+                                                                </div>
+                                                            )}
+                                                            {activity.metadata.raw_response_preview && (
+                                                                <div>
+                                                                    <div className="text-xs font-semibold text-gray-700">Respuesta cruda (preview)</div>
+                                                                    <JsonPreview data={activity.metadata.raw_response_preview} />
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    )}
                                                 </div>
                                             </div>
                                         </div>

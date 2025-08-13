@@ -322,8 +322,8 @@ const LocationDropdown = ({
               {loadingServiceAreas ? 'Cargando áreas...' : 'Seleccionar área de servicio'}
             </option>
             {serviceAreas.map((area, index) => (
-              <option key={`${area.service_area}-${index}`} value={area.service_area}>
-                {area.service_area}
+              <option key={`${area.service_area || area.code}-${index}`} value={area.service_area || area.code}>
+                {(area.display_name || area.name || area.service_area)}
               </option>
             ))}
           </select>

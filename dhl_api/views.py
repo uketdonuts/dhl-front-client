@@ -72,7 +72,10 @@ def validate_required_fields(data, required_fields):
             value = data.get(field)
         
         # Validar que el campo no esté vacío
-        if value is None or (isinstance(value, str) and value.strip() == '') or (isinstance(value, (int, float)) and value == 0):
+        if value is None or (isinstance(value, str) and value.strip() == ''):
+            errors.append(f"Campo requerido faltante o vacío: '{field}'")
+        # Para campos numéricos, solo considerar como vacío si es exactamente 0 Y es un campo de peso/dimensiones
+        elif isinstance(value, (int, float)) and value <= 0 and any(x in field.lower() for x in ['weight', 'length', 'width', 'height']):
             errors.append(f"Campo requerido faltante o vacío: '{field}'")
     
     return len(errors) == 0, errors
@@ -102,11 +105,11 @@ def validate_form_completeness(request_data, form_type):
             'currency_code', 'items'
         ],
         'tracking': ['tracking_number'],
-        'epod': ['tracking_number'],
+        'epod': ['shipment_id'],
         'shipment': [
-            'origin.postal_code', 'origin.city', 'origin.country',
-            'destination.postal_code', 'destination.city', 'destination.country',
-            'weight', 'dimensions.length', 'dimensions.width', 'dimensions.height',
+            'shipper.city', 'shipper.country',
+            'recipient.city', 'recipient.country',
+            'package.weight', 'package.length', 'package.width', 'package.height',
             'shipper.name', 'shipper.email', 'shipper.phone',
             'recipient.name', 'recipient.email', 'recipient.phone'
         ]
@@ -183,7 +186,7 @@ def login_view(request):
     **Respuesta de error (400):**
     {
         "success": false,
-        "message": "Datos inválidos"
+        "message": "Ha ocurrido un error"
     }
     """
     serializer = LoginSerializer(data=request.data)
@@ -239,7 +242,7 @@ def login_view(request):
     
     return Response({
         'success': False,
-        'message': 'Datos inválidos'
+        'message': 'Ha ocurrido un error'
     }, status=status.HTTP_400_BAD_REQUEST)
 
 
@@ -292,7 +295,7 @@ def rate_view(request):
     **Respuesta de error (400/500):**
     {
         "success": false,
-        "message": "Error descriptivo",
+        "message": "Ha ocurrido un error",
         "error_type": "validation_error|internal_error",
         "request_timestamp": "2025-07-07T10:30:00"
     }
@@ -303,6 +306,20 @@ def rate_view(request):
     - Los errores se manejan de forma consistente con metadatos
     """
     serializer = RateRequestSerializer(data=request.data)
+
+    # Helper para sanear payloads de ubicación
+    def _sanitize_loc_payload(d):
+        try:
+            d = dict(d or {})
+        except Exception:
+            return d
+        d.pop('service_area_name', None)
+        d.pop('serviceAreaName', None)
+        if d.get('service_area') and d.get('city') and d['service_area'] == d['city']:
+            d.pop('service_area', None)
+        if d.get('serviceArea') and d.get('city') and d['serviceArea'] == d['city']:
+            d.pop('serviceArea', None)
+        return d
     
     # ✅ Validar completitud del formulario ANTES del serializer
     is_complete, validation_error = validate_form_completeness(request.data, 'rate')
@@ -311,7 +328,15 @@ def rate_view(request):
     
     # Agregar logging para debugging
     logger.info(f"=== RATE REQUEST DEBUG ===")
-    logger.info(f"Raw request data: {request.data}")
+    try:
+        _raw_sanitized = {
+            **(request.data if isinstance(request.data, dict) else {}),
+            'origin': _sanitize_loc_payload((request.data or {}).get('origin', {})),
+            'destination': _sanitize_loc_payload((request.data or {}).get('destination', {})),
+        }
+    except Exception:
+        _raw_sanitized = request.data
+    logger.info(f"Raw request data: {_raw_sanitized}")
     logger.info(f"Serializer valid: {serializer.is_valid()}")
     if not serializer.is_valid():
         logger.error(f"Serializer errors: {serializer.errors}")
@@ -332,17 +357,22 @@ def rate_view(request):
             account_number = serializer.validated_data.get('account_number') or None
             
             # Logging para debugging
+            # Sanear payloads validados y usar estos en logs y llamada al servicio
+            _origin = _sanitize_loc_payload(serializer.validated_data['origin'])
+            _destination = _sanitize_loc_payload(serializer.validated_data['destination'])
+
             logger.info(f"=== CALLING DHL SERVICE ===")
-            logger.info(f"Origin: {serializer.validated_data['origin']}")
-            logger.info(f"Destination: {serializer.validated_data['destination']}")
+            logger.info(f"Origin: {_origin}")
+            logger.info(f"Destination: {_destination}")
             logger.info(f"Weight: {serializer.validated_data['weight']}")
             logger.info(f"Dimensions: {serializer.validated_data['dimensions']}")
             logger.info(f"Account number: {account_number}")
             logger.info(f"Service: {service}")
             
+            # Llamar API DHL
             result = dhl_service.get_rate(
-                origin=serializer.validated_data['origin'],
-                destination=serializer.validated_data['destination'],
+                origin=_origin,
+                destination=_destination,
                 weight=serializer.validated_data['weight'],
                 dimensions=serializer.validated_data['dimensions'],
                 declared_weight=serializer.validated_data.get('declared_weight'),
@@ -399,7 +429,25 @@ def rate_view(request):
                         'destination_country': serializer.validated_data['destination'].get('country'),
                         'weight': str(serializer.validated_data['weight']),
                         'rates_count': len(result.get('rates', [])),
-                        'service_type': serializer.validated_data.get('service', 'P')
+                        'service_type': serializer.validated_data.get('service', 'P'),
+                        # Captura de payloads para historial
+                        'request_payload': {
+                            'origin': _origin,
+                            'destination': _destination,
+                            'weight': serializer.validated_data['weight'],
+                            'dimensions': serializer.validated_data['dimensions'],
+                            'declared_weight': serializer.validated_data.get('declared_weight'),
+                            'account_number': account_number,
+                            'content_type': service
+                        },
+                        'response_payload': {
+                            'http_status': 200,
+                            'success': result.get('success', False),
+                            'total_rates': result.get('total_rates', len(result.get('rates', []))),
+                            'message': result.get('message', ''),
+                            'weight_breakdown': result.get('weight_breakdown', {}),
+                            # Evitar almacenar todo raw_data pesado si no es necesario
+                        }
                     }
                 )
             else:
@@ -412,8 +460,28 @@ def rate_view(request):
                     user_agent=request.META.get('HTTP_USER_AGENT'),
                     metadata={
                         'error_message': result.get('message'),
+                        'error_code': result.get('error_code'),
+                        'http_status': result.get('http_status'),
+                        'raw_response_preview': result.get('raw_response'),
                         'origin_country': serializer.validated_data['origin'].get('country'),
-                        'destination_country': serializer.validated_data['destination'].get('country')
+                        'destination_country': serializer.validated_data['destination'].get('country'),
+                        # Captura de payloads para historial
+                        'request_payload': {
+                            'origin': serializer.validated_data['origin'],
+                            'destination': serializer.validated_data['destination'],
+                            'weight': serializer.validated_data['weight'],
+                            'dimensions': serializer.validated_data['dimensions'],
+                            'declared_weight': serializer.validated_data.get('declared_weight'),
+                            'account_number': account_number,
+                            'content_type': service
+                        },
+                        'response_payload': {
+                            'success': result.get('success', False),
+                            'message': result.get('message', ''),
+                            'error_code': result.get('error_code'),
+                            'http_status': result.get('http_status'),
+                            'raw_response_preview': result.get('raw_response')
+                        }
                     }
                 )
             
@@ -435,14 +503,14 @@ def rate_view(request):
             
             return Response({
                 'success': False,
-                'message': f'Error interno: {str(e)}',
+                'message': 'Ha ocurrido un error',
                 'error_type': 'internal_error',
                 'request_timestamp': datetime.now().isoformat()
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     
     return Response({
         'success': False,
-        'message': 'Datos inválidos para cotización',
+        'message': 'Ha ocurrido un error',
         'error_type': 'validation_error',
         'errors': serializer.errors
     }, status=status.HTTP_400_BAD_REQUEST)
@@ -532,7 +600,7 @@ def rate_compare_view(request):
             logger.error(f"Error en rate_compare_view: {str(e)}")
             return Response({
                 'success': False,
-                'message': f'Error en comparación: {str(e)}',
+                'message': 'Ha ocurrido un error',
                 'error_type': 'internal_error',
                 'request_timestamp': datetime.now().isoformat(),
                 'requested_by': request.user.username
@@ -540,7 +608,7 @@ def rate_compare_view(request):
     
     return Response({
         'success': False,
-        'message': 'Datos inválidos para comparación',
+        'message': 'Ha ocurrido un error',
         'error_type': 'validation_error',
         'errors': serializer.errors,
         'request_timestamp': datetime.now().isoformat(),
@@ -712,7 +780,7 @@ def landed_cost_view(request):
     **Respuesta de error (400/500):**
     {
         "success": false,
-        "message": "Error descriptivo",
+        "message": "Ha ocurrido un error",
         "error_type": "validation_error|internal_error",
         "request_timestamp": "2025-07-25T10:30:00"
     }
@@ -732,7 +800,27 @@ def landed_cost_view(request):
     
     logger.info(f"=== LANDED COST REQUEST ===")
     logger.info(f"User: {request.user.username}")
-    logger.info(f"Request data: {request.data}")
+    def _sanitize_loc_payload(d):
+        try:
+            d = dict(d or {})
+        except Exception:
+            return d
+        d.pop('service_area_name', None)
+        d.pop('serviceAreaName', None)
+        if d.get('service_area') and d.get('city') and d['service_area'] == d['city']:
+            d.pop('service_area', None)
+        if d.get('serviceArea') and d.get('city') and d['serviceArea'] == d['city']:
+            d.pop('serviceArea', None)
+        return d
+    try:
+        _raw_sanitized = {
+            **(request.data if isinstance(request.data, dict) else {}),
+            'origin': _sanitize_loc_payload((request.data or {}).get('origin', {})),
+            'destination': _sanitize_loc_payload((request.data or {}).get('destination', {})),
+        }
+    except Exception:
+        _raw_sanitized = request.data
+    logger.info(f"Request data: {_raw_sanitized}")
     
     if serializer.is_valid():
         try:
@@ -748,7 +836,7 @@ def landed_cost_view(request):
                     is_valid, errors, warnings, recommendations
                 )
                 validation_response['success'] = False
-                validation_response['message'] = 'Errores de validación encontrados'
+                validation_response['message'] = 'Ha ocurrido un error'
                 validation_response['error_type'] = 'validation_error'
                 validation_response['request_timestamp'] = datetime.now().isoformat()
                 validation_response['requested_by'] = request.user.username
@@ -787,9 +875,11 @@ def landed_cost_view(request):
             logger.info(f"Items count: {len(serializer.validated_data.get('items', []))}")
             
             # ✅ Llamar al servicio simplificado
+            _origin = _sanitize_loc_payload(serializer.validated_data['origin'])
+            _destination = _sanitize_loc_payload(serializer.validated_data['destination'])
             result = dhl_service.get_landed_cost(
-                origin=serializer.validated_data['origin'],
-                destination=serializer.validated_data['destination'],
+                origin=_origin,
+                destination=_destination,
                 weight=serializer.validated_data['weight'],
                 dimensions=serializer.validated_data['dimensions'],
                 currency_code=serializer.validated_data.get('currency_code', 'USD'),
@@ -848,13 +938,42 @@ def landed_cost_view(request):
                     # No fallar la request si hay error en DB, pero informar
                     result['db_warning'] = 'Landed cost calculated but not saved to database'
             
+            # Registrar actividad con payloads
+            try:
+                UserActivity.log_activity(
+                    user=request.user,
+                    action='landed_cost_quote',
+                    description='Landed cost calculado' if result.get('success') else f"Error Landed Cost: {result.get('message', '')}",
+                    status='success' if result.get('success') else 'error',
+                    ip_address=request.META.get('REMOTE_ADDR'),
+                    user_agent=request.META.get('HTTP_USER_AGENT'),
+                    resource_type='landed_cost',
+                    metadata={
+                        'request_payload': {
+                            **serializer.validated_data,
+                            'origin': _origin,
+                            'destination': _destination,
+                        },
+                        'response_payload': {
+                            'success': result.get('success'),
+                            'message': result.get('message'),
+                            'error_code': result.get('error_code'),
+                            'http_status': result.get('http_status'),
+                            'raw_response_preview': result.get('raw_response'),
+                            'totals': result.get('landed_cost', {})
+                        }
+                    }
+                )
+            except Exception as _e:
+                logger.debug(f"Activity log for landed_cost_view skipped: {_e}")
+
             return Response(result)
             
         except Exception as e:
             logger.error(f"Error en landed_cost_view: {str(e)}")
             return Response({
                 'success': False,
-                'message': f'Error en cálculo de landed cost: {str(e)}',
+                'message': 'Ha ocurrido un error',
                 'error_type': 'internal_error',
                 'request_timestamp': datetime.now().isoformat(),
                 'requested_by': request.user.username
@@ -862,7 +981,7 @@ def landed_cost_view(request):
     
     return Response({
         'success': False,
-        'message': 'Datos inválidos para cálculo de landed cost',
+        'message': 'Ha ocurrido un error',
         'error_type': 'validation_error',
         'errors': serializer.errors,
         'request_timestamp': datetime.now().isoformat(),
@@ -921,7 +1040,7 @@ def tracking_view(request):
             logger.error(f"Error creating default DHL account: {str(e)}")
             return Response({
                 'success': False,
-                'message': 'Error al crear cuenta DHL por defecto. Contacta al administrador.',
+                'message': 'Ha ocurrido un error',
                 'error_code': 'DB_ERROR',
                 'request_timestamp': datetime.now(),
                 'requested_by': username
@@ -952,7 +1071,7 @@ def tracking_view(request):
             logger.error(f"Error with DHL service: {str(e)}")
             return Response({
                 'success': False,
-                'message': f'Error interno del servicio DHL: {str(e)}',
+                'message': 'Ha ocurrido un error',
                 'error_type': 'dhl_service_error',
                 'request_timestamp': datetime.now().isoformat(),
                 'tracking_number': tracking_number,
@@ -980,16 +1099,64 @@ def tracking_view(request):
                 'suggestion': tracking_info.get('suggestion', 'Reintentar más tarde'),
                 'raw_response': tracking_info.get('raw_response', '')
             })
+            # Registrar actividad con payloads (error)
+            try:
+                if request.user.is_authenticated:
+                    UserActivity.log_activity(
+                        user=request.user,
+                        action='track_shipment',
+                        description=f"Error tracking {tracking_number}: {tracking_info.get('message', '')}",
+                        status='error',
+                        ip_address=request.META.get('REMOTE_ADDR'),
+                        user_agent=request.META.get('HTTP_USER_AGENT'),
+                        resource_type='tracking',
+                        resource_id=str(tracking_number),
+                        metadata={
+                            'request_payload': {'tracking_number': tracking_number},
+                            'response_payload': {
+                                'success': False,
+                                'message': tracking_info.get('message'),
+                                'error_code': tracking_info.get('error_code'),
+                                'raw_response_preview': tracking_info.get('raw_response')
+                            }
+                        }
+                    )
+            except Exception as _e:
+                logger.debug(f"Activity log for tracking error skipped: {_e}")
             return Response(response_data, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         
         logger.info(f"Tracking successful for {tracking_number}")
+        # Registrar actividad con payloads (success)
+        try:
+            if request.user.is_authenticated:
+                UserActivity.log_activity(
+                    user=request.user,
+                    action='track_shipment',
+                    description=f'Tracking consultado - {tracking_number}',
+                    status='success',
+                    ip_address=request.META.get('REMOTE_ADDR'),
+                    user_agent=request.META.get('HTTP_USER_AGENT'),
+                    resource_type='tracking',
+                    resource_id=str(tracking_number),
+                    metadata={
+                        'request_payload': {'tracking_number': tracking_number},
+                        'response_payload': {
+                            'success': True,
+                            'message': tracking_info.get('message'),
+                            'events': tracking_info.get('total_events', 0),
+                            'pieces': tracking_info.get('total_pieces', 0)
+                        }
+                    }
+                )
+        except Exception as _e:
+            logger.debug(f"Activity log for tracking success skipped: {_e}")
         return Response(response_data)
         
     except Exception as e:
         logger.exception(f"Error in tracking_view: {str(e)}")
         return Response({
             'success': False,
-            'message': 'Error interno del servidor',
+            'message': 'Ha ocurrido un error',
             'error_code': 'SERVER_ERROR',
             'suggestion': 'Reintentar más tarde',
             'request_timestamp': datetime.now(),
@@ -1082,7 +1249,7 @@ def epod_view(request):
         return Response({
             'success': False,
             'status': 'validation_error',
-            'message': 'Datos de entrada inválidos. Verifique el número de tracking.',
+            'message': 'Ha ocurrido un error',
             'error_type': 'validation_error',
             'errors': serializer.errors,
             'processing_info': {
@@ -1177,6 +1344,34 @@ def epod_view(request):
             }
             
             logger.info(f"ePOD found successfully for {shipment_id}: {result.get('size_mb', 0)}MB")
+            # Registrar actividad ePOD success
+            try:
+                UserActivity.log_activity(
+                    user=request.user,
+                    action='epod_request',
+                    description=f"ePOD encontrado - {shipment_id}",
+                    status='success',
+                    ip_address=request.META.get('REMOTE_ADDR'),
+                    user_agent=request.META.get('HTTP_USER_AGENT'),
+                    resource_type='epod',
+                    resource_id=str(shipment_id),
+                    metadata={
+                        'request_payload': {
+                            'shipment_id': shipment_id,
+                            'account_number': account_number,
+                            'content_type': content_type
+                        },
+                        'response_payload': {
+                            'success': True,
+                            'message': result.get('message'),
+                            'documents_found': result.get('total_documents', 0),
+                            'valid_documents': result.get('valid_documents', 0),
+                            'size_mb': result.get('size_mb', 0)
+                        }
+                    }
+                )
+            except Exception as _e:
+                logger.debug(f"Activity log for ePOD success skipped: {_e}")
             return Response(client_response, status=status.HTTP_200_OK)
             
         else:
@@ -1196,18 +1391,16 @@ def epod_view(request):
             # Determinar estado según el tipo de error
             if error_code in ['NO_DOCUMENTS', '404']:
                 status_code = 'not_found'
-                user_message = f'No se encontró ePOD para el envío {shipment_id}'
-                if error_code == '404':
-                    user_message += '. El envío puede no estar entregado aún.'
+                user_message = 'Ha ocurrido un error'
             elif error_code in ['401', 'INVALID_CREDENTIALS']:
                 status_code = 'authentication_error'
-                user_message = 'Error de autenticación con DHL. Contacte al administrador.'
+                user_message = 'Ha ocurrido un error'
             elif error_code in ['TIMEOUT_ERROR', 'CONNECTION_ERROR']:
                 status_code = 'connection_error'
-                user_message = 'Error de conexión con DHL. Intente nuevamente en unos minutos.'
+                user_message = 'Ha ocurrido un error'
             else:
                 status_code = 'processing_error'
-                user_message = f'Error procesando solicitud: {error_message}'
+                user_message = 'Ha ocurrido un error'
             
             client_response = {
                 'success': False,
@@ -1236,6 +1429,34 @@ def epod_view(request):
                 http_status = status.HTTP_503_SERVICE_UNAVAILABLE
             else:
                 http_status = status.HTTP_200_OK  # Error controlado
+            # Registrar actividad ePOD error/not found
+            try:
+                UserActivity.log_activity(
+                    user=request.user,
+                    action='epod_request',
+                    description=f"ePOD no disponible - {shipment_id}: {error_code}",
+                    status='error',
+                    ip_address=request.META.get('REMOTE_ADDR'),
+                    user_agent=request.META.get('HTTP_USER_AGENT'),
+                    resource_type='epod',
+                    resource_id=str(shipment_id),
+                    metadata={
+                        'request_payload': {
+                            'shipment_id': shipment_id,
+                            'account_number': account_number,
+                            'content_type': content_type
+                        },
+                        'response_payload': {
+                            'success': False,
+                            'message': error_message,
+                            'error_code': error_code,
+                            'http_status': http_status,
+                            'suggestion': suggestion
+                        }
+                    }
+                )
+            except Exception as _e:
+                logger.debug(f"Activity log for ePOD error skipped: {_e}")
             
             return Response(client_response, status=http_status)
             
@@ -1252,7 +1473,7 @@ def epod_view(request):
         error_response = {
             'success': False,
             'status': 'internal_error',
-            'message': 'Error interno del servidor. El equipo técnico ha sido notificado.',
+            'message': 'Ha ocurrido un error',
             'error_code': 'INTERNAL_ERROR',
             'suggestion': 'Intente nuevamente en unos minutos o contacte soporte si persiste',
             'processing_info': processing_info,
@@ -1263,6 +1484,32 @@ def epod_view(request):
             }
         }
         
+        # Registrar actividad ePOD unexpected error
+        try:
+            UserActivity.log_activity(
+                user=request.user,
+                action='epod_request',
+                description=f"Error interno ePOD - {shipment_id}",
+                status='error',
+                ip_address=request.META.get('REMOTE_ADDR'),
+                user_agent=request.META.get('HTTP_USER_AGENT'),
+                resource_type='epod',
+                resource_id=str(shipment_id),
+                metadata={
+                    'request_payload': {
+                        'shipment_id': shipment_id,
+                        'account_number': account_number,
+                        'content_type': content_type
+                    },
+                    'response_payload': {
+                        'success': False,
+                        'message': 'Ha ocurrido un error',
+                        'error_code': 'INTERNAL_ERROR'
+                    }
+                }
+            )
+        except Exception as _e:
+            logger.debug(f"Activity log for ePOD exception skipped: {_e}")
         return Response(error_response, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -1325,7 +1572,7 @@ def shipment_view(request):
     **Respuesta de error (400/500):**
     {
         "success": false,
-        "message": "Error descriptivo",
+        "message": "Ha ocurrido un error",
         "error_type": "validation_error|shipment_error|internal_error",
         "request_timestamp": "2025-07-07T10:30:00"
     }
@@ -1352,6 +1599,23 @@ def shipment_view(request):
             
             # Transformar los datos para el servicio DHL
             shipment_data = serializer.validated_data.copy()
+            # Sanear campos no soportados en shipper/recipient
+            def _sanitize_party(p):
+                try:
+                    p = dict(p or {})
+                except Exception:
+                    return p
+                p.pop('service_area_name', None)
+                p.pop('serviceAreaName', None)
+                if p.get('service_area') and p.get('city') and p['service_area'] == p['city']:
+                    p.pop('service_area', None)
+                if p.get('serviceArea') and p.get('city') and p['serviceArea'] == p['city']:
+                    p.pop('serviceArea', None)
+                return p
+            if 'shipper' in shipment_data:
+                shipment_data['shipper'] = _sanitize_party(shipment_data['shipper'])
+            if 'recipient' in shipment_data:
+                shipment_data['recipient'] = _sanitize_party(shipment_data['recipient'])
             
             # Convertir 'package' (singular) a 'packages' (plural) que espera el servicio
             if 'package' in shipment_data:
@@ -1365,8 +1629,9 @@ def shipment_view(request):
             result['request_timestamp'] = datetime.now().isoformat()
             result['requested_by'] = request.user.username
             
-            # Guardar envío en la base de datos si es exitoso
+            # Verificar si el resultado del servicio DHL fue exitoso
             if result.get('success'):
+                # Guardar envío en la base de datos si es exitoso
                 try:
                     shipper = shipment_data['shipper']
                     recipient = shipment_data['recipient']
@@ -1427,7 +1692,16 @@ def shipment_view(request):
                         metadata={
                             'tracking_number': result.get('tracking_number'),
                             'service_type': serializer.validated_data.get('service_type'),
-                            'destination_country': serializer.validated_data.get('destination', {}).get('country')
+                            'destination_country': serializer.validated_data.get('destination', {}).get('country'),
+                            # Captura de payloads
+                            'request_payload': {
+                                'shipment': shipment_data
+                            },
+                            'response_payload': {
+                                'success': True,
+                                'message': result.get('message'),
+                                'tracking_number': result.get('tracking_number')
+                            }
                         }
                     )
                     
@@ -1435,8 +1709,49 @@ def shipment_view(request):
                     logger.warning(f"Error saving shipment to DB: {str(db_error)}")
                     # No fallar la request si hay error en DB, pero informar
                     result['db_warning'] = 'Shipment created but not saved to database'
-            
-            return Response(result)
+                
+                # Retornar respuesta exitosa con HTTP 200
+                return Response(result)
+            else:
+                # El servicio DHL retornó un error
+                error_type = result.get('error_type', 'shipment_error')
+                
+                # Registrar actividad de error
+                UserActivity.log_activity(
+                    user=request.user,
+                    action='create_shipment',
+                    description=f'Error en DHL API: {result.get("message", "Error desconocido")}',
+                    status='error',
+                    ip_address=request.META.get('REMOTE_ADDR'),
+                    user_agent=request.META.get('HTTP_USER_AGENT'),
+                    metadata={
+                        'error_type': error_type,
+                        'dhl_message': result.get('message'),
+                        'request_data': serializer.validated_data,
+                        # Captura de payloads
+                        'request_payload': {
+                            'shipment': shipment_data
+                        },
+                        'response_payload': {
+                            'success': False,
+                            'message': result.get('message'),
+                            'error_code': result.get('error_code'),
+                            'http_status': result.get('http_status'),
+                            'raw_response_preview': result.get('raw_response')
+                        }
+                    }
+                )
+                
+                # Determinar el código de estado HTTP apropiado
+                if error_type == 'billing_country_mismatch':
+                    status_code = status.HTTP_400_BAD_REQUEST
+                elif error_type == 'validation_error':
+                    status_code = status.HTTP_400_BAD_REQUEST
+                else:
+                    status_code = status.HTTP_422_UNPROCESSABLE_ENTITY
+                
+                # Retornar error con código de estado apropiado
+                return Response(result, status=status_code)
             
         except Exception as e:
             logger.error(f"Error en shipment_view: {str(e)}")
@@ -1454,14 +1769,14 @@ def shipment_view(request):
             
             return Response({
                 'success': False,
-                'message': f'Error interno: {str(e)}',
+                'message': 'Ha ocurrido un error',
                 'error_type': 'internal_error',
                 'request_timestamp': datetime.now().isoformat()
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     
     return Response({
         'success': False,
-        'message': 'Datos inválidos para crear envío',
+        'message': 'Ha ocurrido un error',
         'error_type': 'validation_error',
         'errors': serializer.errors
     }, status=status.HTTP_400_BAD_REQUEST)
@@ -1484,7 +1799,7 @@ def shipments_list_view(request):
         logger.error(f"Error en shipments_list_view: {str(e)}")
         return Response({
             'success': False,
-            'message': f'Error interno: {str(e)}'
+            'message': 'Ha ocurrido un error'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -1510,7 +1825,7 @@ def shipment_detail_view(request, shipment_id):
         logger.error(f"Error en shipment_detail_view: {str(e)}")
         return Response({
             'success': False,
-            'message': f'Error interno: {str(e)}'
+            'message': 'Ha ocurrido un error'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -1531,7 +1846,7 @@ def rates_history_view(request):
         logger.error(f"Error en rates_history_view: {str(e)}")
         return Response({
             'success': False,
-            'message': f'Error interno: {str(e)}'
+            'message': 'Ha ocurrido un error'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -1583,7 +1898,7 @@ def dhl_status_view(request):
     **Respuesta de error (500):**
     {
         "success": false,
-        "message": "Error descriptivo",
+        "message": "Ha ocurrido un error",
         "error_type": "internal_error",
         "request_timestamp": "2025-07-07T10:30:00"
     }
@@ -1619,7 +1934,7 @@ def dhl_status_view(request):
         logger.error(f"Error en dhl_status_view: {str(e)}")
         return Response({
             'success': False,
-            'message': f'Error interno: {str(e)}',
+            'message': 'Ha ocurrido un error',
             'error_type': 'internal_error'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
@@ -1671,7 +1986,7 @@ def validate_shipment_date_view(request):
     **Respuesta de error (500):**
     {
         "success": false,
-        "message": "Error descriptivo",
+        "message": "Ha ocurrido un error",
         "error_type": "internal_error",
         "request_timestamp": "2025-07-07T10:30:00"
     }
@@ -1767,7 +2082,7 @@ def validate_shipment_date_view(request):
         logger.error(f"Error en validate_shipment_date_view: {str(e)}")
         return Response({
             'success': False,
-            'message': f'Error interno: {str(e)}',
+            'message': 'Ha ocurrido un error',
             'error_type': 'internal_error',
             'request_timestamp': datetime.now().isoformat()
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -1822,7 +2137,7 @@ def dhl_account_create(request):
             account.save()
             return Response({
                 'success': False,
-                'message': f'Error al validar la cuenta: {str(e)}',
+                'message': 'Ha ocurrido un error',
                 'account': DHLAccountSerializer(account).data
             }, status=status.HTTP_400_BAD_REQUEST)
     
@@ -1918,7 +2233,7 @@ def field_info(request):
         logger.error(f"Error obteniendo información de campos: {str(e)}")
         return Response({
             'success': False,
-            'message': 'Error interno del servidor',
+            'message': 'Ha ocurrido un error',
             'error': str(e)
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
@@ -1971,7 +2286,7 @@ def field_info_specific(request, field_name):
         logger.error(f"Error obteniendo información del campo {field_name}: {str(e)}")
         return Response({
             'success': False,
-            'message': 'Error interno del servidor',
+            'message': 'Ha ocurrido un error',
             'error': str(e)
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
@@ -2052,7 +2367,7 @@ def user_activities_view(request):
         if not filter_serializer.is_valid():
             return Response({
                 'success': False,
-                'message': 'Parámetros de filtro inválidos',
+                'message': 'Ha ocurrido un error',
                 'errors': filter_serializer.errors
             }, status=status.HTTP_400_BAD_REQUEST)
         
@@ -2137,7 +2452,7 @@ def user_activities_view(request):
         logger.error(f"Error obteniendo actividades de usuario: {str(e)}")
         return Response({
             'success': False,
-            'message': 'Error interno del servidor',
+            'message': 'Ha ocurrido un error',
             'error': str(e)
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
@@ -2297,7 +2612,7 @@ def user_activity_stats_view(request):
         logger.error(f"Error obteniendo estadísticas de actividades: {str(e)}")
         return Response({
             'success': False,
-            'message': 'Error interno del servidor',
+            'message': 'Ha ocurrido un error',
             'error': str(e)
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
@@ -2364,7 +2679,7 @@ def contacts_view(request):
             logger.error(f"Error obteniendo contactos: {str(e)}")
             return Response({
                 'success': False,
-                'message': 'Error al obtener contactos',
+                'message': 'Ha ocurrido un error',
                 'error': str(e)
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     
@@ -2391,7 +2706,7 @@ def contacts_view(request):
             else:
                 return Response({
                     'success': False,
-                    'message': 'Datos inválidos',
+                    'message': 'Ha ocurrido un error',
                     'errors': serializer.errors
                 }, status=status.HTTP_400_BAD_REQUEST)
                 
@@ -2399,7 +2714,7 @@ def contacts_view(request):
             logger.error(f"Error creando contacto: {str(e)}")
             return Response({
                 'success': False,
-                'message': 'Error al crear contacto',
+                'message': 'Ha ocurrido un error',
                 'error': str(e)
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
@@ -2434,7 +2749,7 @@ def contact_detail_view(request, contact_id):
             logger.error(f"Error obteniendo contacto {contact_id}: {str(e)}")
             return Response({
                 'success': False,
-                'message': 'Error al obtener contacto',
+                'message': 'Ha ocurrido un error',
                 'error': str(e)
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     
@@ -2461,7 +2776,7 @@ def contact_detail_view(request, contact_id):
             else:
                 return Response({
                     'success': False,
-                    'message': 'Datos inválidos',
+                    'message': 'Ha ocurrido un error',
                     'errors': serializer.errors
                 }, status=status.HTTP_400_BAD_REQUEST)
                 
@@ -2469,7 +2784,7 @@ def contact_detail_view(request, contact_id):
             logger.error(f"Error actualizando contacto {contact_id}: {str(e)}")
             return Response({
                 'success': False,
-                'message': 'Error al actualizar contacto',
+                'message': 'Ha ocurrido un error',
                 'error': str(e)
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     
@@ -2496,7 +2811,7 @@ def contact_detail_view(request, contact_id):
             logger.error(f"Error eliminando contacto {contact_id}: {str(e)}")
             return Response({
                 'success': False,
-                'message': 'Error al eliminar contacto',
+                'message': 'Ha ocurrido un error',
                 'error': str(e)
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
@@ -2539,7 +2854,7 @@ def contact_toggle_favorite_view(request, contact_id):
         logger.error(f"Error toggleando favorito para contacto {contact_id}: {str(e)}")
         return Response({
             'success': False,
-            'message': 'Error al actualizar favorito',
+            'message': 'Ha ocurrido un error',
             'error': str(e)
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
@@ -2572,7 +2887,7 @@ def contact_use_view(request, contact_id):
         logger.error(f"Error registrando uso de contacto {contact_id}: {str(e)}")
         return Response({
             'success': False,
-            'message': 'Error al registrar uso de contacto',
+            'message': 'Ha ocurrido un error',
             'error': str(e)
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
@@ -2649,7 +2964,7 @@ def create_contact_from_shipment_view(request):
         logger.error(f"Error creando contactos desde envío: {str(e)}")
         return Response({
             'success': False,
-            'message': 'Error al crear contactos automáticamente',
+            'message': 'Ha ocurrido un error',
             'error': str(e)
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
@@ -2686,7 +3001,7 @@ def get_countries(request):
         logger.error(f"Error obteniendo países: {str(e)}")
         return Response({
             'success': False,
-            'message': 'Error al obtener lista de países',
+            'message': 'Ha ocurrido un error',
             'error': str(e)
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
@@ -2723,7 +3038,7 @@ def get_states_by_country(request, country_code):
         logger.error(f"Error obteniendo estados para {country_code}: {str(e)}")
         return Response({
             'success': False,
-            'message': f'Error al obtener estados de {country_code}',
+            'message': 'Ha ocurrido un error',
             'error': str(e)
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
@@ -2769,7 +3084,7 @@ def get_cities_by_country_state(request, country_code, state_code=None):
         logger.error(f"Error obteniendo ciudades para {country_code}/{state_code}: {str(e)}")
         return Response({
             'success': False,
-            'message': f'Error al obtener ciudades de {country_code}',
+            'message': 'Ha ocurrido un error',
             'error': str(e)
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
@@ -2792,18 +3107,47 @@ def get_service_areas_by_location(request, country_code):
         - Lista de áreas de servicio disponibles
     """
     try:
-        from .models import ServiceZone
+        from .models import ServiceZone, ServiceAreaCityMap
         from .serializers import ServiceAreaSerializer
         
         state_code = request.GET.get('state_code')
         city_name = request.GET.get('city_name')
         
-        service_areas = ServiceZone.get_service_areas_by_location(
+        raw_service_areas = ServiceZone.get_service_areas_by_location(
             country_code.upper(),
             state_code.upper() if state_code else None,
             city_name
         )
-        serializer = ServiceAreaSerializer(service_areas, many=True)
+        # Resolver nombres amigables desde ServiceAreaCityMap
+        codes = [sa['service_area'] for sa in raw_service_areas]
+        display_by_code = {}
+        if codes:
+            mappings = (ServiceAreaCityMap.objects
+                        .filter(country_code=country_code.upper(), service_area__in=codes)
+                        .values('service_area', 'display_name')
+                        .distinct())
+            # Priorizar nombres únicos por código; si hay múltiples, tomamos el primero
+            for m in mappings:
+                display_by_code.setdefault(m['service_area'], m['display_name'])
+
+        enriched = []
+        for sa in raw_service_areas:
+            code = sa.get('service_area')
+            dn = display_by_code.get(code, code)
+            enriched.append({
+                'service_area': code,
+                'display_name': dn,
+            })
+
+        # Asegurar unicidad de display_name: si se repite, concatenar código
+        counts = {}
+        for item in enriched:
+            counts[item['display_name']] = counts.get(item['display_name'], 0) + 1
+        for item in enriched:
+            if counts.get(item['display_name'], 0) > 1:
+                item['display_name'] = f"{item['display_name']} - {item['service_area']}"
+
+        serializer = ServiceAreaSerializer(enriched, many=True)
         
         return Response({
             'success': True,
@@ -2821,7 +3165,7 @@ def get_service_areas_by_location(request, country_code):
         logger.error(f"Error obteniendo áreas de servicio: {str(e)}")
         return Response({
             'success': False,
-            'message': 'Error al obtener áreas de servicio',
+            'message': 'Ha ocurrido un error',
             'error': str(e)
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
@@ -2996,14 +3340,14 @@ def get_postal_codes_by_location(request, country_code):
         logger.error(f"Error de parámetros obteniendo códigos postales: {str(e)}")
         return Response({
             'success': False,
-            'message': 'Parámetros inválidos',
+            'message': 'Ha ocurrido un error',
             'error': f'Error en parámetros: {str(e)}'
         }, status=status.HTTP_400_BAD_REQUEST)
     except Exception as e:
         logger.error(f"Error obteniendo códigos postales: {str(e)}")
         return Response({
             'success': False,
-            'message': 'Error al obtener códigos postales',
+            'message': 'Ha ocurrido un error',
             'error': str(e)
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
@@ -3080,7 +3424,7 @@ def search_service_zones(request):
     except ValueError as e:
         return Response({
             'success': False,
-            'message': 'Parámetros de paginación inválidos',
+            'message': 'Ha ocurrido un error',
             'error': str(e)
         }, status=status.HTTP_400_BAD_REQUEST)
         
@@ -3088,7 +3432,7 @@ def search_service_zones(request):
         logger.error(f"Error en búsqueda de zonas de servicio: {str(e)}")
         return Response({
             'success': False,
-            'message': 'Error al buscar zonas de servicio',
+            'message': 'Ha ocurrido un error',
             'error': str(e)
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
@@ -3214,6 +3558,62 @@ def analyze_country_structure(request, country_code):
         logger.error(f"Error analizando estructura del país {country_code}: {str(e)}")
         return Response({
             'success': False,
-            'message': 'Error al analizar estructura del país',
+            'message': 'Ha ocurrido un error',
+            'error': str(e)
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+@cache_page(60 * 10)
+def resolve_service_area_display(request):
+    """Resuelve nombre amigable para un service_area dado.
+
+    Query params:
+      - country_code (requerido)
+      - service_area (requerido)
+      - postal_code (opcional)
+      - state_code (opcional)
+      - fallback_city (opcional)
+    """
+    try:
+        from .models import ServiceAreaCityMap
+
+        country_code = (request.GET.get('country_code') or '').upper().strip()
+        service_area = (request.GET.get('service_area') or '').upper().strip()
+        postal_code = request.GET.get('postal_code')
+        state_code = request.GET.get('state_code')
+        fallback_city = request.GET.get('fallback_city')
+
+        if not country_code or not service_area:
+            return Response({
+                'success': False,
+                'message': 'country_code y service_area son requeridos'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        result = ServiceAreaCityMap.resolve_display(
+            country_code=country_code,
+            service_area=service_area,
+            postal_code=postal_code,
+            state_code=state_code,
+            fallback_city=fallback_city,
+        )
+
+        return Response({
+            'success': True,
+            'data': result,
+            'inputs': {
+                'country_code': country_code,
+                'service_area': service_area,
+                'postal_code': postal_code,
+                'state_code': state_code,
+                'fallback_city': fallback_city,
+            }
+        })
+    except Exception as e:
+        logger.error(f"Error resolviendo display de service_area: {str(e)}")
+        return Response({
+            'success': False,
+            'message': 'Ha ocurrido un error',
             'error': str(e)
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

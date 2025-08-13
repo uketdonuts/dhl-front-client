@@ -7,6 +7,7 @@ import { DHL_CATEGORIES } from '../../constants/dhlCategories';
 import useFormValidation from '../../hooks/useFormValidation';
 import FormValidationStatus from '../FormValidationStatus';
 import NumericInput from '../NumericInput';
+import { normalizePayloadLocations, formatPostalCode } from '../../utils/dhlValidations';
 
 /**
  * Componente para la pestaña "Costo Total de Importación"
@@ -115,7 +116,7 @@ const LandedCostTab = ({ handleCreateShipmentFromRate, setActiveTab, selectedAcc
       origin: {
         ...prev.origin,
         country: location.country || '',
-        city: location.city || '',
+        city: location.cityName || location.city || '',
         postal_code: location.postalCode || ''
       }
     }));
@@ -164,8 +165,8 @@ const LandedCostTab = ({ handleCreateShipmentFromRate, setActiveTab, selectedAcc
       originalFormData: formData
     });
 
-    // Mostrar notificación
-    alert(`✅ Datos prellenados desde Landed Cost:\n• Origen: ${formData.origin.city}, ${formData.origin.country}\n• Destino: ${formData.destination.city}, ${formData.destination.country}\n• Peso: ${formData.weight}kg\n• Costo estimado: ${result.landed_cost.currency} ${result.landed_cost.total_cost?.toLocaleString()}\n\nNavegando a la pestaña "Crear Envío"...`);
+    // Notificación removida por solicitud del usuario
+    // alert(`✅ Datos prellenados desde Landed Cost:\n• Origen: ${formData.origin.city}, ${formData.origin.country}\n• Destino: ${formData.destination.city}, ${formData.destination.country}\n• Peso: ${formData.weight}kg\n• Costo estimado: ${result.landed_cost.currency} ${result.landed_cost.total_cost?.toLocaleString()}\n\nNavegando a la pestaña "Crear Envío"...`);
 
     // Usar la función existente del Dashboard
     handleCreateShipmentFromRate(simulatedRate, simulatedRateData);
@@ -184,7 +185,7 @@ const LandedCostTab = ({ handleCreateShipmentFromRate, setActiveTab, selectedAcc
       destination: {
         ...prev.destination,
         country: location.country || '',
-        city: location.city || '',
+        city: location.cityName || location.city || '',
         postal_code: location.postalCode || ''
       }
     }));
@@ -314,12 +315,78 @@ const LandedCostTab = ({ handleCreateShipmentFromRate, setActiveTab, selectedAcc
     setError(null);
     setResult(null);
 
+    /**
+     * Función para formatear códigos postales según el país
+     */
+    const formatPostalCode = (postalCode, countryCode) => {
+      if (!postalCode) return '0';
+      
+      const code = postalCode.toString().toUpperCase().replace(/\s/g, '');
+      
+      switch (countryCode) {
+        case 'CA': // Canadá: A9A 9A9
+          if (code.length === 6) {
+            return `${code.slice(0, 3)} ${code.slice(3)}`;
+          } else if (code.length === 5) {
+            return `${code.slice(0, 3)} ${code.slice(3)}0`;
+          } else if (code.length < 6) {
+            const paddedCode = (code + 'A1A1A1').slice(0, 6);
+            return `${paddedCode.slice(0, 3)} ${paddedCode.slice(3)}`;
+          }
+          return code;
+          
+        case 'US': // Estados Unidos: 99999 o 99999-9999
+          if (code.length === 5) {
+            return code;
+          } else if (code.length === 9) {
+            return `${code.slice(0, 5)}-${code.slice(5)}`;
+          }
+          return code.slice(0, 5) || '00000';
+          
+        default:
+          return postalCode || '0';
+      }
+    };
+
+    // Preparar datos y normalizar ubicaciones (Country, City en mayúsculas y postal_code compacto)
+    const preparedData = normalizePayloadLocations({
+      ...formData,
+      origin: {
+        ...formData.origin,
+        postal_code: formatPostalCode(formData.origin.postal_code, formData.origin.country)
+      },
+      destination: {
+        ...formData.destination,
+        postal_code: formatPostalCode(formData.destination.postal_code, formData.destination.country)
+      }
+    });
+
+  // Sanitizar: remover service_area_name/serviceAreaName y service_area/serviceArea redundante (igual a city)
+  const sanitizeLocationPayload = (data) => {
+      try {
+        const cloned = JSON.parse(JSON.stringify(data));
+        ['origin', 'destination'].forEach((key) => {
+          if (cloned[key]) {
+            if ('service_area_name' in cloned[key]) delete cloned[key].service_area_name;
+      if ('serviceAreaName' in cloned[key]) delete cloned[key].serviceAreaName;
+            // No enviar service_area en payload: eliminar siempre ambas variantes
+            if ('service_area' in cloned[key]) delete cloned[key].service_area;
+            if ('serviceArea' in cloned[key]) delete cloned[key].serviceArea;
+          }
+        });
+        return cloned;
+      } catch (_) {
+        return data;
+      }
+    };
+
     try {
-      const response = await api.post('/dhl/landed-cost/', formData);
+      const sanitized = sanitizeLocationPayload(preparedData);
+      const response = await api.post('/dhl/landed-cost/', sanitized);
       setResult(response.data);
     } catch (err) {
       console.error('Error calculando costo total:', err);
-      setError(err.response?.data?.message || 'Error al calcular costo total de importación');
+      setError('Ha ocurrido un error');
     } finally {
       setLoading(false);
     }

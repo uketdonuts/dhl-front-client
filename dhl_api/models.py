@@ -637,3 +637,103 @@ class ServiceZone(models.Model):
         ).distinct().order_by('postal_code_from')
         
         return postal_codes
+
+
+class ServiceAreaCityMap(models.Model):
+    """Mapa de área de servicio DHL a nombres de ciudad amigables por país.
+
+    Permite resolver códigos como YHM/YYZ, etc., a un nombre presentado al usuario
+    según convenciones por país. Puede opcionalmente acotar por estado y/o rango postal.
+    """
+
+    country_code = models.CharField(max_length=2, help_text="Código de país ISO (2 letras)")
+    state_code = models.CharField(max_length=10, blank=True, help_text="Código de estado/provincia (opcional)")
+    service_area = models.CharField(max_length=10, help_text="Código de área de servicio DHL (ej: YHM)")
+
+    # Datos de presentación
+    city_name = models.CharField(max_length=120, help_text="Nombre base de ciudad (ej: Richmond Hill)")
+    display_name = models.CharField(max_length=180, help_text="Nombre final a mostrar (ej: Richmond Hill L4B 1B1)")
+
+    # Acotadores opcionales
+    postal_code_from = models.CharField(max_length=20, blank=True)
+    postal_code_to = models.CharField(max_length=20, blank=True)
+
+    notes = models.TextField(blank=True, help_text="Notas o fuente del mapeo")
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'Mapa Área de Servicio-Ciudad'
+        verbose_name_plural = 'Mapas Área de Servicio-Ciudad'
+        indexes = [
+            models.Index(fields=['country_code', 'service_area']),
+            models.Index(fields=['country_code', 'state_code', 'service_area']),
+        ]
+        unique_together = [
+            ['country_code', 'state_code', 'service_area', 'postal_code_from', 'postal_code_to']
+        ]
+
+    def __str__(self) -> str:
+        scope = self.country_code
+        if self.state_code:
+            scope += f"-{self.state_code}"
+        rng = ''
+        if self.postal_code_from and self.postal_code_to:
+            rng = f" [{self.postal_code_from}-{self.postal_code_to}]"
+        return f"{scope} {self.service_area} → {self.display_name}{rng}"
+
+    @classmethod
+    def resolve_display(
+        cls,
+        *,
+        country_code: str,
+        service_area: str,
+        postal_code: str | None = None,
+        state_code: str | None = None,
+        fallback_city: str | None = None,
+    ) -> dict:
+        """Resuelve un nombre amigable para mostrar basado en el mapeo.
+
+        Retorna un dict con: display_name, source ('exact'|'range'|'area'|'fallback'),
+        and used_mapping (id or None).
+        """
+        country_code = (country_code or '').upper()
+        service_area = (service_area or '').upper()
+        state_code = (state_code or '').upper() if state_code else None
+        pc = (postal_code or '').replace(' ', '').upper() if postal_code else None
+
+        qs = cls.objects.filter(country_code=country_code, service_area=service_area)
+        if state_code:
+            qs = qs.filter(models.Q(state_code=state_code) | models.Q(state_code=''))
+
+        # 1) Intentar match por rango postal si se proporcionó postal_code
+        if pc:
+            rng_match = qs.exclude(postal_code_from='').exclude(postal_code_to='')
+            # Comparación simple lexicográfica tras normalizar (sirve para CA/US donde longitud es constante)
+            rng_match = rng_match.filter(postal_code_from__lte=pc, postal_code_to__gte=pc)
+            obj = rng_match.order_by('-state_code').first()
+            if obj:
+                return {
+                    'display_name': obj.display_name,
+                    'source': 'range',
+                    'used_mapping': obj.id,
+                }
+
+        # 2) Match por área (sin rango)
+        area_match = qs.filter(models.Q(postal_code_from='') | models.Q(postal_code_from__isnull=True))
+        obj = area_match.order_by('-state_code').first()
+        if obj:
+            return {
+                'display_name': obj.display_name,
+                'source': 'area',
+                'used_mapping': obj.id,
+            }
+
+        # 3) Fallback a ciudad provista o al propio service_area
+        display = fallback_city or service_area
+        return {
+            'display_name': display,
+            'source': 'fallback',
+            'used_mapping': None,
+        }

@@ -668,7 +668,8 @@ class ServiceZoneService {
     try {
       const result = await this.getPostalCodesByLocation(filters.country, {
         stateCode: filters.state,
-        cityName: filters.city
+        cityName: filters.city,
+        serviceArea: filters.serviceArea
       });
       
       // Si hay error de filtros requeridos, devolver el error completo
@@ -709,10 +710,45 @@ class ServiceZoneService {
       }
 
       const response = await api.get(`/service-zones/areas/${countryCode.toUpperCase()}/`);
+      const baseAreas = response.data.data || [];
+
+      // Resolver nombres amigables por área de servicio usando el endpoint dedicado
+      const resolved = await Promise.all(
+        baseAreas.map(async (item) => {
+          const code = item.service_area || item.code || item.name;
+          if (!code) {
+            return { service_area: '', display_name: '' };
+          }
+          try {
+            const res = await api.get('/service-zones/resolve-display/', {
+              params: {
+                country_code: countryCode.toUpperCase(),
+                service_area: String(code).toUpperCase()
+              }
+            });
+            const dn = res.data?.data?.display_name || String(code).toUpperCase();
+            return { service_area: String(code).toUpperCase(), display_name: dn };
+          } catch (e) {
+            return { service_area: String(code).toUpperCase(), display_name: String(code).toUpperCase() };
+          }
+        })
+      );
+
+      // Evitar nombres duplicados: si se repite display_name, concatenar el código
+      const counts = resolved.reduce((acc, a) => {
+        const key = a.display_name || '';
+        acc[key] = (acc[key] || 0) + 1;
+        return acc;
+      }, {});
+      const uniqueList = resolved.map(a => ({
+        service_area: a.service_area,
+        display_name: counts[a.display_name] > 1 ? `${a.display_name} - ${a.service_area}` : a.display_name
+      }));
+
       return {
         success: true,
-        data: response.data.data || [],
-        count: response.data.count || 0
+        data: uniqueList,
+        count: uniqueList.length
       };
     } catch (error) {
       console.error('Error obteniendo áreas de servicio:', error);

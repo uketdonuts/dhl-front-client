@@ -10,6 +10,7 @@ import LandedCostTab from './dashboard/LandedCostTab';
 import ShipmentTab from './dashboard/ShipmentTab';
 import TrackingTab from './dashboard/TrackingTab';
 import EpodTab from './dashboard/EpodTab';
+import { formatPostalCode, normalizePayloadLocations, normalizeShipmentParties } from '../utils/dhlValidations';
 
 // Componente para mostrar errores específicos de DHL
 const DhlErrorAlert = ({ error, onDismiss }) => {
@@ -52,12 +53,100 @@ const DhlErrorAlert = ({ error, onDismiss }) => {
   );
 };
 
-const Dashboard = ({ selectedAccount, setSelectedAccount }) => {
+// Componente para mostrar advertencias de validación
+const ValidationWarnings = ({ warnings, onDismiss }) => {
+  if (!warnings || warnings.length === 0) return null;
+
+  return (
+    <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-4">
+      <div className="flex items-start">
+        <div className="flex-shrink-0">
+          <span className="text-yellow-600 text-lg">⚠️</span>
+        </div>
+        <div className="ml-3 flex-1">
+          <h3 className="text-sm font-medium text-yellow-800">
+            Advertencias de Validación ({warnings.length})
+          </h3>
+          <div className="mt-2 text-sm text-yellow-700">
+            <ul className="list-disc list-inside space-y-1">
+              {warnings.map((warning, index) => (
+                <li key={index}>{warning}</li>
+              ))}
+            </ul>
+          </div>
+        </div>
+        {onDismiss && (
+          <div className="ml-auto pl-3">
+            <button
+              onClick={onDismiss}
+              className="inline-flex text-yellow-400 hover:text-yellow-600 focus:outline-none"
+            >
+              <span className="sr-only">Dismiss</span>
+              <svg className="h-5 w-5" fill="currentColor" viewBox="0 0 20 20">
+                <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+              </svg>
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+const Dashboard = ({ selectedAccount = null, setSelectedAccount }) => {
   const { isAuthenticated, user } = useAuth();
   const [activeTab, setActiveTab] = useState('rate');
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState('');
+  const [warnings, setWarnings] = useState([]);
+
+  // Normaliza payloads antes de enviar: elimina duplicados de campos y claves redundantes
+  const sanitizeLocationPayload = (data) => {
+    try {
+      const cloned = JSON.parse(JSON.stringify(data));
+      ['origin', 'destination'].forEach((key) => {
+        if (cloned[key]) {
+          // Eliminar alias de nombres amigables innecesarios
+          if ('service_area_name' in cloned[key]) delete cloned[key].service_area_name;
+          if ('serviceAreaName' in cloned[key]) delete cloned[key].serviceAreaName;
+          // Si existen ambas variantes de postal, conservar snake_case (backend espera postal_code)
+          if ('postal_code' in cloned[key] && 'postalCode' in cloned[key]) {
+            delete cloned[key].postalCode;
+          }
+          // No enviar service_area en payload (requisito): eliminar siempre ambas variantes
+          if ('service_area' in cloned[key]) delete cloned[key].service_area;
+          if ('serviceArea' in cloned[key]) delete cloned[key].serviceArea;
+        }
+      });
+      return cloned;
+    } catch (_) {
+      return data;
+    }
+  };
+
+  // Sanitiza payload de shipment (shipper/recipient) eliminando duplicados
+  const sanitizeShipmentPayload = (data) => {
+    try {
+      const cloned = JSON.parse(JSON.stringify(data));
+      ['shipper', 'recipient'].forEach((key) => {
+        if (cloned[key]) {
+          if ('service_area_name' in cloned[key]) delete cloned[key].service_area_name;
+          if ('serviceAreaName' in cloned[key]) delete cloned[key].serviceAreaName;
+          // Para shipment usamos camelCase en UI; si existen ambas variantes, conservar camelCase
+          if ('postal_code' in cloned[key] && 'postalCode' in cloned[key]) {
+            delete cloned[key].postal_code;
+          }
+          // No enviar service_area en payload (requisito): eliminar siempre ambas variantes
+          if ('service_area' in cloned[key]) delete cloned[key].service_area;
+          if ('serviceArea' in cloned[key]) delete cloned[key].serviceArea;
+        }
+      });
+      return cloned;
+    } catch (_) {
+      return data;
+    }
+  };
   
   // Estados para crear envío - Completamente vacío
   const [shipmentData, setShipmentData] = useState({
@@ -159,6 +248,12 @@ const Dashboard = ({ selectedAccount, setSelectedAccount }) => {
     account_number: '',
   });
 
+  // Estados para guardar datos completos de ubicaciones de dropdowns
+  const [rateLocationData, setRateLocationData] = useState({
+    origin: null,
+    destination: null
+  });
+
   // Configurar axios para incluir el token
   const getAuthHeaders = () => {
     const token = localStorage.getItem('token');
@@ -182,14 +277,28 @@ const Dashboard = ({ selectedAccount, setSelectedAccount }) => {
   }, [selectedAccount]);
 
   const handleRateRequest = async () => {
+    // Debug: Mostrar el estado actual de los datos
+    console.log('🔍 DEBUG - Estado actual de rateData:', {
+      'rateData completo': rateData,
+      'origen country': rateData.origin?.country,
+      'origen city': rateData.origin?.city,
+      'destino country': rateData.destination?.country,
+      'destino city': rateData.destination?.city,
+      'peso': rateData.weight
+    });
+
     // Validar datos requeridos
     if (!rateData.origin.country || !rateData.destination.country) {
       setError('Por favor selecciona al menos el país de origen y destino');
       return;
     }
 
-    if (!rateData.origin.city || !rateData.destination.city) {
-      setError('Por favor selecciona la ciudad de origen y destino');
+    // Validar que hay ciudad O service area para origen y destino
+    const originHasLocation = rateData.origin.city || rateData.origin.postal_code;
+    const destinationHasLocation = rateData.destination.city || rateData.destination.postal_code;
+
+    if (!originHasLocation || !destinationHasLocation) {
+      setError('Por favor selecciona la ciudad de origen y destino (o código postal)');
       return;
     }
 
@@ -202,16 +311,88 @@ const Dashboard = ({ selectedAccount, setSelectedAccount }) => {
     setError('');
     setResult(null);
 
+    /**
+     * Función para formatear códigos postales según el país
+     */
+    const formatPostalCode = (postalCode, countryCode) => {
+      if (!postalCode) return '0';
+      
+      const code = postalCode.toString().toUpperCase().replace(/\s/g, '');
+      
+      switch (countryCode) {
+        case 'CA': // Canadá: A9A 9A9
+          if (code.length === 6) {
+            return `${code.slice(0, 3)} ${code.slice(3)}`;
+          } else if (code.length === 5) {
+            // Si tiene 5 caracteres, asumir que falta el último dígito
+            return `${code.slice(0, 3)} ${code.slice(3)}0`;
+          } else if (code.length < 6) {
+            // Completar con caracteres por defecto para formato válido
+            const paddedCode = (code + 'A1A1A1').slice(0, 6);
+            return `${paddedCode.slice(0, 3)} ${paddedCode.slice(3)}`;
+          }
+          return code;
+          
+        case 'US': // Estados Unidos: 99999 o 99999-9999
+          if (code.length === 5) {
+            return code;
+          } else if (code.length === 9) {
+            return `${code.slice(0, 5)}-${code.slice(5)}`;
+          }
+          return code.slice(0, 5) || '00000';
+          
+        default:
+          // Para otros países, usar "0" si está vacío
+          return postalCode || '0';
+      }
+    };
+
+    // Preparar datos y normalizar ubicaciones (Country, City en mayúsculas y postal_code compacto)
+    const preparedData = normalizePayloadLocations({
+      ...rateData,
+      origin: {
+        ...rateData.origin,
+        postal_code: formatPostalCode(rateData.origin.postal_code, rateData.origin.country)
+      },
+      destination: {
+        ...rateData.destination,
+        postal_code: formatPostalCode(rateData.destination.postal_code, rateData.destination.country)
+      }
+    });
+
+    // Validar datos usando el sistema de validaciones DHL
+    const { validateDHLRequest } = await import('../utils/dhlValidations');
+    const validation = validateDHLRequest(preparedData, 'rate');
+    
+    // Mostrar warnings si los hay
+    if (validation.warnings && validation.warnings.length > 0) {
+      setWarnings(validation.warnings);
+      console.log('⚠️ ADVERTENCIAS DE VALIDACIÓN:', validation.warnings);
+    } else {
+      setWarnings([]);
+    }
+    
+    // Si hay errores críticos, no continuar
+    if (!validation.isValid) {
+      setError(`Errores de validación: ${validation.errors.join('; ')}`);
+      setLoading(false);
+      return;
+    }
+
     // Debug: log de datos antes de enviar la cotización
     console.log('📊 DATOS DE COTIZACIÓN ENVIADOS:', {
-      origin: rateData.origin,
-      destination: rateData.destination,
-      originCountry: rateData.origin.country,
-      destinationCountry: rateData.destination.country
+      original: rateData,
+      prepared: preparedData,
+      origin: preparedData.origin,
+      destination: preparedData.destination,
+      originCountry: preparedData.origin.country,
+      destinationCountry: preparedData.destination.country,
+      validation: validation
     });
 
     try {
-      const response = await axios.post('/api/dhl/rate/', rateData, {
+      const sanitized = sanitizeLocationPayload(preparedData);
+      const response = await axios.post('/api/dhl/rate/', sanitized, {
         headers: getAuthHeaders()
       });
       
@@ -308,6 +489,15 @@ const Dashboard = ({ selectedAccount, setSelectedAccount }) => {
     }));
   };
 
+  // Función para manejar cambios de ubicación completos desde dropdowns
+  const handleRateLocationDataChange = (type, locationData) => {
+    setRateLocationData(prev => ({
+      ...prev,
+      [type]: locationData
+    }));
+    console.log(`📍 Ubicación ${type} actualizada:`, locationData);
+  };
+
   // Función para actualizar dimensiones
   const updateDimensions = (field, value) => {
     setRateData(prev => ({
@@ -324,6 +514,12 @@ const Dashboard = ({ selectedAccount, setSelectedAccount }) => {
     setActiveTab('rate');
   };
 
+  // Función para limpiar datos de ubicación cuando sea necesario
+  const clearRateLocationData = () => {
+    setRateLocationData({ origin: null, destination: null });
+    console.log('🔄 Datos de ubicación de cotización limpiados');
+  };
+
   // Función para crear envío
   const handleCreateShipment = async () => {
     setShipmentLoading(true);
@@ -331,18 +527,26 @@ const Dashboard = ({ selectedAccount, setSelectedAccount }) => {
     setShipmentResult(null);
 
     try {
-      const response = await axios.post('/api/dhl/shipment/', shipmentData, {
+  const normalizedShipment = normalizeShipmentParties(shipmentData);
+  const sanitizedShipment = sanitizeShipmentPayload(normalizedShipment);
+      const response = await axios.post('/api/dhl/shipment/', sanitizedShipment, {
         headers: getAuthHeaders()
       });
       
-      setShipmentResult(response.data);
-      
-      // Si el envío fue exitoso, guardar contactos automáticamente
+      // Verificar si la respuesta indica éxito o error
       if (response.data.success) {
+        setShipmentResult(response.data);
+        // Si el envío fue exitoso, guardar contactos automáticamente
         await saveContactsFromShipment(shipmentData);
+      } else {
+        // El backend respondió pero indicó un error (ej: error DHL)
+        setShipmentError(response.data.message || 'Error al crear envío');
+        setShipmentResult(null);
       }
     } catch (err) {
+      // Error de red, autenticación, etc.
       setShipmentError(err.response?.data?.message || 'Error al crear envío');
+      setShipmentResult(null);
     } finally {
       setShipmentLoading(false);
     }
@@ -489,12 +693,17 @@ const Dashboard = ({ selectedAccount, setSelectedAccount }) => {
   };
 
   // Helper function para preservar datos de cotización de forma inteligente
-  const preserveQuoteDataForShipment = (originalRateData, selectedRate) => {
+  const preserveQuoteDataForShipment = (originalRateData, selectedRate, locationData = null) => {
     console.log('🧪 PRESERVE FUNCTION INPUT:', {
       'originalRateData.origin': originalRateData.origin,
       'originalRateData.destination': originalRateData.destination,
-      'selectedRate': selectedRate
+      'selectedRate': selectedRate,
+      'locationData': locationData
     });
+
+    // Usar datos de ubicación completos si están disponibles
+    const originLocation = locationData?.origin || {};
+    const destinationLocation = locationData?.destination || {};
 
     const result = {
       // Datos básicos preservados
@@ -507,22 +716,30 @@ const Dashboard = ({ selectedAccount, setSelectedAccount }) => {
       service: selectedRate.service_code || originalRateData.service || 'P',
       account_number: originalRateData.account_number || '',
       
-      // Origen completo
-      origin: {
-        city: originalRateData.origin?.city || '',
-        state: originalRateData.origin?.state || '',
-        postal_code: originalRateData.origin?.postal_code || '',
-        country: originalRateData.origin?.country || '',
-        country_name: originalRateData.origin_country_name || originalRateData.origin?.country_name || ''
+      // Origen completo - Priorizar datos de dropdown si están disponibles
+  origin: {
+        city: originLocation.cityName || originLocation.city || originalRateData.origin?.city || '',
+        state: originLocation.state || originalRateData.origin?.state || '',
+        postal_code: originLocation.postalCode || originalRateData.origin?.postal_code || '',
+        country: originLocation.country || originalRateData.origin?.country || '',
+        country_name: originLocation.countryName || originalRateData.origin_country_name || originalRateData.origin?.country_name || '',
+        service_area: originLocation.serviceArea || originalRateData.origin?.service_area || '',
+        // Datos adicionales del dropdown para mejor experiencia
+        stateName: originLocation.stateName || '',
+        postalCodeRange: originLocation.postalCodeRange || ''
       },
       
-      // Destino completo
-      destination: {
-        city: originalRateData.destination?.city || '',
-        state: originalRateData.destination?.state || '',
-        postal_code: originalRateData.destination?.postal_code || '',
-        country: originalRateData.destination?.country || '',
-        country_name: originalRateData.destination_country_name || originalRateData.destination?.country_name || ''
+      // Destino completo - Priorizar datos de dropdown si están disponibles
+  destination: {
+        city: destinationLocation.cityName || destinationLocation.city || originalRateData.destination?.city || '',
+        state: destinationLocation.state || originalRateData.destination?.state || '',
+        postal_code: destinationLocation.postalCode || originalRateData.destination?.postal_code || '',
+        country: destinationLocation.country || originalRateData.destination?.country || '',
+        country_name: destinationLocation.countryName || originalRateData.destination_country_name || originalRateData.destination?.country_name || '',
+        service_area: destinationLocation.serviceArea || originalRateData.destination?.service_area || '',
+        // Datos adicionales del dropdown para mejor experiencia
+        stateName: destinationLocation.stateName || '',
+        postalCodeRange: destinationLocation.postalCodeRange || ''
       },
       
       // Información de la tarifa seleccionada
@@ -552,6 +769,7 @@ const Dashboard = ({ selectedAccount, setSelectedAccount }) => {
     console.log('🔍 DEBUG COMPLETO DE DATOS RECIBIDOS:', {
       'originalRateData completo': originalRateData,
       'selectedRate completo': selectedRate,
+      'rateLocationData completo': rateLocationData,
       'originalRateData.origin': originalRateData.origin,
       'originalRateData.destination': originalRateData.destination
     });
@@ -562,15 +780,16 @@ const Dashboard = ({ selectedAccount, setSelectedAccount }) => {
       'destino': originalRateData.destination.country
     });
 
-    // Usar la función helper para preservar todos los datos
-    const preservedData = preserveQuoteDataForShipment(originalRateData, selectedRate);
+    // Usar la función helper para preservar todos los datos (incluyendo datos de ubicación)
+    const preservedData = preserveQuoteDataForShipment(originalRateData, selectedRate, rateLocationData);
 
     // Debug específico para country fields
     console.log('🔍 DEBUG COUNTRY DATA:', {
       'originalRateData.origin.country': originalRateData.origin?.country,
       'originalRateData.destination.country': originalRateData.destination?.country,
       'preservedData.origin.country': preservedData.origin?.country,
-      'preservedData.destination.country': preservedData.destination?.country
+      'preservedData.destination.country': preservedData.destination?.country,
+      'rateLocationData': rateLocationData
     });
 
     // Capturar TODOS los datos de la cotización para pre-llenar el shipment
@@ -578,6 +797,7 @@ const Dashboard = ({ selectedAccount, setSelectedAccount }) => {
       selectedRate,
       originalRateData,
       preservedData,
+      rateLocationData,
       timestamp: new Date().toISOString()
     });
 
@@ -592,7 +812,12 @@ const Dashboard = ({ selectedAccount, setSelectedAccount }) => {
         state: preservedData.origin.state,
         postalCode: preservedData.origin.postal_code,
         country: preservedData.origin.country,
-        countryName: preservedData.origin.country_name
+        countryName: preservedData.origin.country_name,
+  serviceArea: preservedData.origin.service_area,
+  // serviceAreaName omitido intencionalmente
+        // Datos adicionales para mejor experiencia con dropdowns
+        stateName: preservedData.origin.stateName,
+        postalCodeRange: preservedData.origin.postalCodeRange
       },
       recipient: {
         name: '',
@@ -604,7 +829,12 @@ const Dashboard = ({ selectedAccount, setSelectedAccount }) => {
         state: preservedData.destination.state,
         postalCode: preservedData.destination.postal_code,
         country: preservedData.destination.country,
-        countryName: preservedData.destination.country_name
+        countryName: preservedData.destination.country_name,
+  serviceArea: preservedData.destination.service_area,
+  // serviceAreaName omitido intencionalmente
+        // Datos adicionales para mejor experiencia con dropdowns
+        stateName: preservedData.destination.stateName,
+        postalCodeRange: preservedData.destination.postalCodeRange
       },
       package: {
         weight: preservedData.weight,
@@ -625,6 +855,11 @@ const Dashboard = ({ selectedAccount, setSelectedAccount }) => {
         ...originalRateData,
         preservedAt: new Date().toISOString(),
         selectedRateServiceName: selectedRate.service_name
+      },
+      // Preservar datos completos de ubicación para los dropdowns en ShipmentTab
+      _locationData: {
+        origin: rateLocationData.origin,
+        destination: rateLocationData.destination
       }
     };
 
@@ -636,14 +871,26 @@ const Dashboard = ({ selectedAccount, setSelectedAccount }) => {
     const destinationInfo = `${preservedData.destination.city}, ${preservedData.destination.country}`;
     const dimensionsInfo = `${preservedData.dimensions.length}x${preservedData.dimensions.width}x${preservedData.dimensions.height} cm`;
     
-    setNotification({
-      type: 'success',
-      message: `✅ Formulario de envío prellenado con datos de cotización: ${preservedData.selectedRate.service_name}`,
-      details: `� Direcciones y dimensiones completadas automáticamente. Por favor, complete los datos personales del remitente y destinatario (nombres, teléfonos, emails) antes de crear el envío. 💰 Tarifa: ${preservedData.selectedRate.currency} ${preservedData.selectedRate.total_charge}`
-    });
+    // Construir lista de datos preservados
+    const preservedItems = [];
+    if (preservedData.origin.city) preservedItems.push(`📍 Origen: ${originInfo}`);
+    if (preservedData.destination.city) preservedItems.push(`📍 Destino: ${destinationInfo}`);
+  if (preservedData.origin.service_area) preservedItems.push(`🗺️ Área de Servicio Origen: ${preservedData.origin.service_area}`);
+  if (preservedData.destination.service_area) preservedItems.push(`🗺️ Área de Servicio Destino: ${preservedData.destination.service_area}`);
+    if (preservedData.weight) preservedItems.push(`⚖️ Peso: ${preservedData.weight} kg`);
+    if (preservedData.dimensions.length) preservedItems.push(`📏 Dimensiones: ${dimensionsInfo}`);
+    if (preservedData.account_number) preservedItems.push(`🏢 Cuenta: ${preservedData.account_number}`);
+    if (preservedData.service) preservedItems.push(`📦 Servicio: ${preservedData.service}`);
+    
+    // Notificación removida por solicitud del usuario
+    // setNotification({
+    //   type: 'success',
+    //   message: `✅ Formulario de envío prellenado automáticamente`,
+    //   details: `Se han preservado todos los datos de la cotización:\n\n${preservedItems.join('\n')}\n\n💡 Los dropdowns de ubicación mantienen sus selecciones originales. Solo necesitas completar los datos personales (nombres, teléfonos, emails, direcciones) antes de crear el envío.\n\n💰 Tarifa seleccionada: ${preservedData.selectedRate.service_name} - ${preservedData.selectedRate.currency} ${preservedData.selectedRate.total_charge}`
+    // });
     
     console.log('✅ Shipment creado con datos preservados:', newShipmentData);
-    setTimeout(() => setNotification(null), 8000);
+    // setTimeout(() => setNotification(null), 12000);
   };
 
   // Función para actualizar datos del remitente
@@ -657,6 +904,17 @@ const Dashboard = ({ selectedAccount, setSelectedAccount }) => {
     }));
   };
 
+  // Función para actualizar múltiples campos del remitente (optimizada)
+  const updateShipperBulk = (updates) => {
+    setShipmentData(prev => ({
+      ...prev,
+      shipper: {
+        ...prev.shipper,
+        ...updates
+      }
+    }));
+  };
+
   // Función para actualizar datos del destinatario
   const updateRecipient = (field, value) => {
     setShipmentData(prev => ({
@@ -664,6 +922,17 @@ const Dashboard = ({ selectedAccount, setSelectedAccount }) => {
       recipient: {
         ...prev.recipient,
         [field]: value
+      }
+    }));
+  };
+
+  // Función para actualizar múltiples campos del destinatario (optimizada)
+  const updateRecipientBulk = (updates) => {
+    setShipmentData(prev => ({
+      ...prev,
+      recipient: {
+        ...prev.recipient,
+        ...updates
       }
     }));
   };
@@ -1011,6 +1280,12 @@ const Dashboard = ({ selectedAccount, setSelectedAccount }) => {
               onDismiss={() => setError('')}
             />
             
+            {/* Componente para mostrar advertencias de validación */}
+            <ValidationWarnings 
+              warnings={warnings}
+              onDismiss={() => setWarnings([])}
+            />
+            
             <RateTabImproved
               rateData={rateData}
               updateAddress={updateAddress}
@@ -1022,6 +1297,7 @@ const Dashboard = ({ selectedAccount, setSelectedAccount }) => {
               result={result}
               handleCreateShipmentFromRate={handleCreateShipmentFromRate}
               selectedAccount={selectedAccount}
+              onLocationDataChange={handleRateLocationDataChange}
             />
           </div>
         )}
@@ -1039,7 +1315,9 @@ const Dashboard = ({ selectedAccount, setSelectedAccount }) => {
           <ShipmentTab
             shipmentData={shipmentData}
             updateShipper={updateShipper}
+            updateShipperBulk={updateShipperBulk}
             updateRecipient={updateRecipient}
+            updateRecipientBulk={updateRecipientBulk}
             updatePackage={updatePackage}
             openContactModal={openContactModal}
             handleCreateShipment={handleCreateShipment}
@@ -1097,10 +1375,6 @@ const Dashboard = ({ selectedAccount, setSelectedAccount }) => {
 Dashboard.propTypes = {
   selectedAccount: PropTypes.string,
   setSelectedAccount: PropTypes.func.isRequired,
-};
-
-Dashboard.defaultProps = {
-  selectedAccount: null,
 };
 
 export default Dashboard;

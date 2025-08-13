@@ -19,6 +19,7 @@ const RateTabImproved = ({
   result,
   handleCreateShipmentFromRate,
   selectedAccount,
+  onLocationDataChange, // Nueva prop para exponer datos de ubicación completos
 }) => {
   // Estados para las ubicaciones seleccionadas (formato SmartLocationDropdown)
   const [originLocation, setOriginLocation] = useState({
@@ -29,7 +30,9 @@ const RateTabImproved = ({
     city: rateData.origin.city || '',
     cityName: rateData.origin.city || '',
     postalCode: rateData.origin.postal_code || '',
-    postalCodeRange: ''
+    postalCodeRange: '',
+    serviceArea: rateData.origin.service_area || '',
+  // serviceAreaName intentionally not tracked for payload
   });
 
   const [destinationLocation, setDestinationLocation] = useState({
@@ -40,7 +43,9 @@ const RateTabImproved = ({
     city: rateData.destination.city || '',
     cityName: rateData.destination.city || '',
     postalCode: rateData.destination.postal_code || '',
-    postalCodeRange: ''
+    postalCodeRange: '',
+    serviceArea: rateData.destination.service_area || '',
+  // serviceAreaName intentionally not tracked for payload
   });
 
   // Manejar cambios en origen
@@ -50,18 +55,29 @@ const RateTabImproved = ({
     // Actualizar datos del rate
     updateAddress('origin', 'country', location.country || '');
     updateAddress('origin', 'state', location.state || '');
-    updateAddress('origin', 'city', location.city || '');
+    updateAddress('origin', 'city', location.cityName || location.city || '');
     
     // Actualizar código postal si viene del dropdown
     if (location.postalCode) {
       updateAddress('origin', 'postal_code', location.postalCode);
+    }
+
+    // Actualizar serviceArea si viene del dropdown
+    if (location.serviceArea) {
+      updateAddress('origin', 'service_area', location.serviceArea);
+      // No enviar service_area_name en el payload
     }
     
     // Si hay nombre de país completo, actualizar también
     if (location.countryName) {
       updateRateData('origin_country_name', location.countryName);
     }
-  }, [updateAddress, updateRateData]);
+
+    // Notificar cambios de ubicación al componente padre
+    if (onLocationDataChange) {
+      onLocationDataChange('origin', location);
+    }
+  }, [updateAddress, updateRateData, onLocationDataChange]);
 
   // Manejar cambios en destino
   const handleDestinationLocationChange = useCallback((location) => {
@@ -70,18 +86,29 @@ const RateTabImproved = ({
     // Actualizar datos del rate
     updateAddress('destination', 'country', location.country || '');
     updateAddress('destination', 'state', location.state || '');
-    updateAddress('destination', 'city', location.city || '');
+    updateAddress('destination', 'city', location.cityName || location.city || '');
     
     // Actualizar código postal si viene del dropdown
     if (location.postalCode) {
       updateAddress('destination', 'postal_code', location.postalCode);
+    }
+
+    // Actualizar serviceArea si viene del dropdown
+    if (location.serviceArea) {
+      updateAddress('destination', 'service_area', location.serviceArea);
+      // No enviar service_area_name en el payload
     }
     
     // Si hay nombre de país completo, actualizar también
     if (location.countryName) {
       updateRateData('destination_country_name', location.countryName);
     }
-  }, [updateAddress, updateRateData]);
+
+    // Notificar cambios de ubicación al componente padre
+    if (onLocationDataChange) {
+      onLocationDataChange('destination', location);
+    }
+  }, [updateAddress, updateRateData, onLocationDataChange]);
 
   return (
     <div className="space-y-6">
@@ -382,7 +409,7 @@ const RateTabImproved = ({
           <div>
             <h3 className="font-medium">Error en Cotización</h3>
             <p className="mt-1 text-sm opacity-90">
-              {result.error || result.message || 'Ocurrió un error al obtener las tarifas.'}
+              Ha ocurrido un error
             </p>
           </div>
         </div>
@@ -401,7 +428,8 @@ RateTabImproved.propTypes = {
   error: PropTypes.string,
   result: PropTypes.object,
   handleCreateShipmentFromRate: PropTypes.func,
-  selectedAccount: PropTypes.string
+  selectedAccount: PropTypes.string,
+  onLocationDataChange: PropTypes.func
 };
 
 export default RateTabImproved;

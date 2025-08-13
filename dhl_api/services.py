@@ -191,7 +191,7 @@ class DHLService:
                 logger.error(f"Connection error for ePOD {shipment_id}")
                 return {
                     "success": False,
-                    "message": "Error de conexión con DHL. Verifica tu conexión a internet.",
+                    "message": "Ha ocurrido un error",
                     "error_code": "CONNECTION_ERROR",
                     "suggestion": "Verificar conexión a internet y reintentar"
                 }
@@ -199,7 +199,7 @@ class DHLService:
                 logger.error(f"Request error for ePOD {shipment_id}: {str(e)}")
                 return {
                     "success": False,
-                    "message": f"Error en la petición a DHL: {str(e)}",
+                    "message": "Ha ocurrido un error",
                     "error_code": "REQUEST_ERROR",
                     "suggestion": "Reintentar más tarde"
                 }
@@ -208,7 +208,7 @@ class DHLService:
             logger.exception(f"Error in get_ePOD for {shipment_id}")
             return {
                 "success": False, 
-                "message": f"Error en get_ePOD: {str(e)}",
+                "message": "Ha ocurrido un error",
                 "error_code": "GENERAL_ERROR",
                 "suggestion": "Contactar soporte técnico"
             }
@@ -300,15 +300,15 @@ class DHLService:
             account_to_use = account_number if account_number else '706014493'
             logger.info(f"Using account number for rate: {account_to_use}")
             
-            # Limpiar y preparar datos
-            origin_city = self._clean_text(origin.get('city', 'Panama'))
-            origin_postal = origin.get('postal_code', '0')
-            origin_country = origin.get('country', 'PA')
+            # Limpiar y preparar datos - soportar tanto 'country' como 'countryCode'
+            origin_city = self._clean_text(origin.get('city', origin.get('cityName', 'Panama')))
+            origin_postal = origin.get('postal_code', origin.get('postalCode', '0'))
+            origin_country = origin.get('country', origin.get('countryCode', 'PA'))
             origin_state = origin.get('state', 'PA')
             
-            dest_city = self._clean_text(destination.get('city', 'MIA'))
-            dest_postal = destination.get('postal_code', '25134')
-            dest_country = destination.get('country', 'CO')  # Cambiar default de US a CO
+            dest_city = self._clean_text(destination.get('city', destination.get('cityName', 'MIA')))
+            dest_postal = destination.get('postal_code', destination.get('postalCode', '25134'))
+            dest_country = destination.get('country', destination.get('countryCode', 'CO'))  # Cambiar default de US a CO
             
             # Preparar datos para API REST
             import base64
@@ -449,14 +449,14 @@ class DHLService:
             return {
                 'success': False,
                 'error_type': 'connection_error',
-                'message': f'Error de conexión: {str(e)}'
+                'message': 'Ha ocurrido un error'
             }
         except Exception as e:
             logger.error(f"Error inesperado en get_rate: {str(e)}")
             return {
                 'success': False,
                 'error_type': 'unexpected_error',
-                'message': f'Error inesperado: {str(e)}'
+                'message': 'Ha ocurrido un error'
             }
     
     def get_tracking(self, tracking_number):
@@ -528,7 +528,7 @@ class DHLService:
                 logger.error(f"Connection error for tracking {tracking_number}")
                 return {
                     "success": False,
-                    "message": "Error de conexión con DHL. Verifica tu conexión a internet.",
+                    "message": "Ha ocurrido un error",
                     "error_code": "CONNECTION_ERROR",
                     "suggestion": "Verificar conexión a internet y reintentar"
                 }
@@ -536,7 +536,7 @@ class DHLService:
                 logger.error(f"Request error for tracking {tracking_number}: {str(e)}")
                 return {
                     "success": False,
-                    "message": f"Error en la petición a DHL: {str(e)}",
+                    "message": "Ha ocurrido un error",
                     "error_code": "REQUEST_ERROR",
                     "suggestion": "Reintentar más tarde"
                 }
@@ -545,7 +545,7 @@ class DHLService:
             logger.exception(f"Error in get_tracking for {tracking_number}")
             return {
                 "success": False, 
-                "message": f"Error en get_tracking: {str(e)}",
+                "message": "Ha ocurrido un error",
                 "error_code": "GENERAL_ERROR",
                 "suggestion": "Contactar soporte técnico"
             }
@@ -561,6 +561,9 @@ class DHLService:
         try:
             logger.info(f"Creating shipment with content type: {content_type}")
             
+            # Almacenar datos para uso en mensajes de error
+            self._last_shipment_data = shipment_data
+            
             # Validar tipo de contenido
             if content_type not in ["P", "D"]:
                 content_type = "P"  # Default a NON_DOCUMENTS
@@ -573,7 +576,12 @@ class DHLService:
             recipient = shipment_data.get('recipient', {})
             packages = shipment_data.get('packages', [])
             service_type = shipment_data.get('service', 'P')
-            account_number = shipment_data.get('account_number', '706014493')
+            
+            # Determinar cuenta a usar según país de origen
+            account_number = self._get_account_for_country(
+                shipper.get('country', 'PA'), 
+                shipment_data.get('account_number')
+            )
             
             # Validar que haya al menos un paquete
             if not packages or len(packages) == 0:
@@ -683,7 +691,14 @@ class DHLService:
                 
                 shipment_payload["content"]["packages"].append(package_data)
             
-            # Actualizar valor total declarado
+            # Actualizar valor total declarado - DHL requiere mínimo 0.001
+            if total_value <= 0:
+                total_value = 0.01  # Valor mínimo por defecto
+                logger.warning(f"Valor declarado era 0 o menor, usando valor mínimo: {total_value}")
+            elif total_value < 0.001:
+                total_value = 0.001  # Valor mínimo requerido por DHL
+                logger.warning(f"Valor declarado menor al mínimo DHL, ajustando a: {total_value}")
+            
             shipment_payload["content"]["declaredValue"] = total_value
             
             # Si es customs declarable, agregar detalles de commodities
@@ -761,11 +776,27 @@ class DHLService:
             
             return result
             
+        except requests.exceptions.ConnectionError as e:
+            logger.error(f"Error de conexión en create_shipment: {str(e)}")
+            return {
+                'success': False,
+                'error': 'Error de conexión con DHL API. Verifique su conexión a internet y vuelva a intentar.',
+                'error_code': 'CONNECTION_ERROR',
+                'details': str(e)
+            }
+        except requests.exceptions.Timeout as e:
+            logger.error(f"Timeout en create_shipment: {str(e)}")
+            return {
+                'success': False,
+                'error': 'Timeout en la conexión con DHL API. Vuelva a intentar en unos momentos.',
+                'error_code': 'TIMEOUT_ERROR',
+                'details': str(e)
+            }
         except Exception as e:
             logger.error(f"Error en create_shipment: {str(e)}")
             return {
                 "success": False,
-                "message": f"Error en create_shipment: {str(e)}",
+                "message": "Ha ocurrido un error",
                 "error_type": "unexpected_error"
             }
 
@@ -841,7 +872,7 @@ class DHLService:
                     return {
                         "success": False,
                         "error_type": "json_parse_error",
-                        "message": "Respuesta exitosa pero JSON inválido",
+                        "message": "Ha ocurrido un error",
                         "raw_response": response.text[:500]
                     }
                 
@@ -867,64 +898,20 @@ class DHLService:
                     }
             
             elif response.status_code >= 400:
-                # Intentar parsear error JSON
+                # Mensaje genérico para todos los errores, incluyendo un preview de la respuesta cruda
+                raw_preview = None
                 try:
-                    error_data = response.json()
-                    error_message = error_data.get('detail', error_data.get('message', 'Error desconocido'))
-                    
-                    # Manejo específico para tracking 404 - No data found
-                    if response.status_code == 404 and service_type == "Tracking":
-                        return {
-                            "success": False,
-                            "tracking_info": {},
-                            "events": [],
-                            "piece_details": [],
-                            "total_events": 0,
-                            "total_pieces": 0,
-                            "message": "Error DHL API: No data found",
-                            "error_code": "404",
-                            "suggestion": "Reintentar más tarde",
-                            "raw_response": response.text[:500]
-                        }
-                    
-                    # Manejo específico para errores 422 (Validation Error)
-                    if response.status_code == 422:
-                        additional_details = error_data.get('additionalDetails', [])
-                        if additional_details:
-                            # Mejorar los mensajes de error para que sean más comprensibles
-                            friendly_messages = []
-                            for detail in additional_details:
-                                if 'pickup' in detail and 'isRequested' in detail:
-                                    friendly_messages.append("Configuración de pickup inválida")
-                                elif 'pickup' in detail and 'accountNumber' in detail:
-                                    friendly_messages.append("Número de cuenta en pickup no permitido")
-                                elif 'pickup' in detail and 'typeCode' in detail:
-                                    friendly_messages.append("Tipo de pickup inválido")
-                                elif 'quantity/value' in detail and 'not greater or equal to 1' in detail:
-                                    friendly_messages.append("La cantidad debe ser mayor o igual a 1")
-                                elif 'packages' in detail and 'expected minimum item count: 1' in detail:
-                                    friendly_messages.append("Debe incluir al menos un paquete")
-                                else:
-                                    friendly_messages.append(detail)
-                            
-                            error_message = f"Errores de validación: {'; '.join(friendly_messages)}"
-                    
-                    return {
-                        "success": False,
-                        "error_code": str(response.status_code),
-                        "message": f"Error DHL API: {error_message}",
-                        "http_status": response.status_code,
-                        "error_data": error_data
-                    }
-                except ValueError as json_error:
-                    logger.error(f"Invalid JSON in error response: {str(json_error)}")
-                    return {
-                        "success": False,
-                        "error_code": str(response.status_code),
-                        "message": f"Error HTTP {response.status_code}",
-                        "http_status": response.status_code,
-                        "raw_response": response.text[:500]
-                    }
+                    raw_text = response.text or ""
+                    raw_preview = raw_text[:1500]
+                except Exception:
+                    raw_preview = None
+                return {
+                    "success": False,
+                    "error_code": str(response.status_code),
+                    "message": "Ha ocurrido un error",
+                    "http_status": response.status_code,
+                    "raw_response": raw_preview
+                }
             
             else:
                 return {
@@ -939,7 +926,7 @@ class DHLService:
             return {
                 "success": False,
                 "error_type": "parse_error",
-                "message": f"Error procesando respuesta: {str(e)}",
+                "message": "Ha ocurrido un error",
                 "raw_response": response.text[:500] if response else "No response"
             }
     
@@ -986,7 +973,7 @@ class DHLService:
                     "piece_details": [],
                     "total_events": 0,
                     "total_pieces": 0,
-                    "message": "Error DHL API: Formato de respuesta inválido",
+                    "message": "Ha ocurrido un error",
                     "error_code": "INVALID_FORMAT",
                     "suggestion": "Reintentar más tarde",
                     "raw_response": str(data)[:500]
@@ -1002,7 +989,7 @@ class DHLService:
                     "piece_details": [],
                     "total_events": 0,
                     "total_pieces": 0,
-                    "message": "Error DHL API: No se encontró información de tracking",
+                    "message": "Ha ocurrido un error",
                     "error_code": "NO_DATA",
                     "suggestion": "Verificar número de tracking",
                     "raw_response": str(data)[:500]
@@ -1165,7 +1152,7 @@ class DHLService:
                 "piece_details": [],
                 "total_events": 0,
                 "total_pieces": 0,
-                "message": f"Error procesando respuesta de tracking: {str(e)}",
+                "message": "Ha ocurrido un error",
                 "error_code": "PARSE_ERROR",
                 "suggestion": "Reintentar más tarde",
                 "raw_response": str(data)[:500] if data else "No data"
@@ -1330,7 +1317,7 @@ class DHLService:
             return {
                 "success": False,
                 "error_type": "parse_error",
-                "message": f"Error procesando respuesta de cotización: {str(e)}",
+                "message": "Ha ocurrido un error",
                 "raw_data": data
             }
 
@@ -1483,7 +1470,7 @@ class DHLService:
             return {
                 "success": False,
                 "error_type": "parse_error",
-                "message": f"Error interno procesando respuesta ePOD: {str(e)}",
+                "message": "Ha ocurrido un error",
                 "error_code": "PARSE_ERROR",
                 "suggestion": "Contactar soporte técnico - error de procesamiento interno",
                 "raw_data": str(data)[:500] if data else "No data available"
@@ -1780,7 +1767,7 @@ class DHLService:
                 
                 return {
                     'success': False,
-                    'message': f'Error DHL API: {response.status_code}',
+                    'message': 'Ha ocurrido un error',
                     'error_code': 'DHL_API_ERROR',
                     'raw_response': response.text,
                     'error_details': error_data
@@ -1790,7 +1777,7 @@ class DHLService:
             logger.error(f"Error in get_landed_cost: {str(e)}")
             return {
                 'success': False,
-                'message': f'Error interno en cálculo de landed cost: {str(e)}',
+                'message': 'Ha ocurrido un error',
                 'error_code': 'INTERNAL_ERROR'
             }
     
@@ -1901,7 +1888,7 @@ class DHLService:
             logger.error(f"Error parsing landed cost response: {str(e)}")
             return {
                 'success': False,
-                'message': f'Error procesando respuesta de landed cost: {str(e)}',
+                'message': 'Ha ocurrido un error',
                 'error_code': 'PARSE_ERROR'
             }
     
@@ -1929,3 +1916,33 @@ class DHLService:
         }
         
         return descriptions.get(name, descriptions.get(type_code, f'Cargo: {name or type_code}'))
+    
+    def _get_account_for_country(self, origin_country, requested_account=None):
+        """
+        Determina qué cuenta DHL usar según el país de origen del envío
+        
+        Args:
+            origin_country (str): Código de país de origen (ej: 'PA', 'CO', 'US')
+            requested_account (str): Cuenta específica solicitada (opcional)
+            
+        Returns:
+            str: Número de cuenta DHL a usar
+        """
+        # Para envíos internacionales, usar siempre la cuenta IMPEX
+        # La cuenta 706014493 es una cuenta IMPEX que puede manejar envíos internacionales
+        impex_account = '706014493'
+        
+        # Si se especifica una cuenta específica, verificar si es válida para envíos internacionales
+        if requested_account:
+            # Si la cuenta solicitada es la canadiense, usar IMPEX en su lugar
+            if requested_account == '706065602':
+                logger.warning(f"Cuenta canadiense {requested_account} no válida para envíos internacionales, usando cuenta IMPEX: {impex_account}")
+                return impex_account
+            else:
+                logger.info(f"Usando cuenta específica solicitada: {requested_account}")
+                return requested_account
+        
+        # Para todos los países, usar la cuenta IMPEX que permite envíos internacionales
+        logger.info(f"País origen: {origin_country} -> Cuenta DHL IMPEX: {impex_account}")
+        
+        return impex_account

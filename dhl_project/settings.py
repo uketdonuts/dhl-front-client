@@ -22,7 +22,7 @@ DEBUG = config('DEBUG', default=True, cast=bool)
 
 ALLOWED_HOSTS = config(
     'ALLOWED_HOSTS', 
-    default='localhost,127.0.0.1,0.0.0.0,backend', 
+    default='localhost,127.0.0.1,0.0.0.0,backend,875552ef8a0c.ngrok-free.app,*.ngrok-free.app,*.ngrok.io', 
     cast=Csv()
 )
 # Application definition

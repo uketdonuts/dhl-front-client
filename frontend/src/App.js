@@ -3,6 +3,7 @@ import './App.css';
 import Login from './components/Login';
 import Dashboard from './components/Dashboard';
 import Navigation from './components/Navigation';
+import CanadaPostalCodeTest from './components/CanadaPostalCodeTest';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import AddAccount from './components/AddAccount';
@@ -32,6 +33,7 @@ function App() {
       <Router>
         <Routes>
           <Route path="/add-account" element={<AddAccount />} />
+          <Route path="/test-canada" element={<CanadaPostalCodeTest />} />
           <Route
             path="/"
             element={<AppContent selectedAccount={selectedAccount} setSelectedAccount={setSelectedAccount} />}
