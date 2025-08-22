@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import serviceZoneService from '../services/serviceZoneService';
 import { normalizeCityName } from '../utils/dhlValidations';
+import { mapCountryNameToCode, mapCodeToCountryName } from '../utils/countryMappingService';
 
 /**
  * Dropdown inteligente de ubicaciones con buscadores avanzados y cache optimizado
@@ -89,13 +90,17 @@ const SmartLocationDropdown = ({
   /**
    * Analizar estructura del país para determinar campos disponibles (con cache optimizado)
    */
-  const analyzeCountryStructure = useCallback(async (countryCode) => {
+  const analyzeCountryStructure = useCallback(async (countryInput) => {
     // Evitar análisis duplicados
     if (loadingRef.current.countryAnalysis) return;
     
     try {
       setLoadingStates(prev => ({ ...prev, countryAnalysis: true }));
       loadingRef.current.countryAnalysis = true;
+      
+      // Convertir nombre de país a código si es necesario
+      const countryCode = mapCountryNameToCode(countryInput) || countryInput;
+      console.log(`🔍 Analizando país: "${countryInput}" -> código: "${countryCode}"`);
       
       const analysis = await serviceZoneService.analyzeCountryStructure(countryCode);
       setCountryInfo({
@@ -141,8 +146,13 @@ const SmartLocationDropdown = ({
       loadingRef.current.states = true;
       
       const result = await serviceZoneService.getStates(countryCode);
-      if (result.success) {
+      // getStates devuelve directamente un array en éxito
+      if (Array.isArray(result)) {
+        setStates(result);
+      } else if (result?.success && Array.isArray(result.data)) {
         setStates(result.data);
+      } else {
+        setStates([]);
       }
     } catch (error) {
       console.error('Error cargando estados:', error);
@@ -163,17 +173,16 @@ const SmartLocationDropdown = ({
       setLoadingStates(prev => ({ ...prev, cities: true }));
       loadingRef.current.cities = true;
       
-      // Usar el nuevo método smart que detecta automáticamente el campo correcto
-      const result = await serviceZoneService.getCities(filters);
+  // Usar el nuevo método smart que detecta automáticamente el campo correcto
+  const result = await serviceZoneService.getCities({ ...filters, bypassCache: true });
       
       if (result.success && result.data) {
         // El endpoint ahora retorna data con formato consistente
         setCities(result.data);
         
         // Log para debugging
-        if (result.data_type) {
-          console.log(`🎯 Campo usado para ${filters.country}: ${result.data_type}`);
-        }
+        console.log(`🏙️ Ciudades recibidas para ${filters.country}${filters.state ? ' - ' + filters.state : ''}:`, result.data.length);
+        if (result.data_type) console.log(`🎯 Campo usado para ${filters.country}: ${result.data_type}`);
       } else {
         setCities([]);
       }
@@ -300,7 +309,9 @@ const SmartLocationDropdown = ({
   // Cargar estados cuando cambia país (con cache optimizado)
   useEffect(() => {
     if (value.country && countryInfo.hasStates) {
-      loadStates(value.country);
+      // Convertir nombre de país a código si es necesario
+      const countryCode = mapCountryNameToCode(value.country) || value.country;
+      loadStates(countryCode);
     } else {
       setStates([]);
     }
@@ -309,10 +320,28 @@ const SmartLocationDropdown = ({
   // Cargar ciudades cuando cambia país/estado (con cache optimizado)
   useEffect(() => {
     if (value.country && countryInfo.hasCities) {
-      const filters = { country: value.country };
+      // Convertir nombre de país a código si es necesario
+      const countryCode = mapCountryNameToCode(value.country) || value.country;
+      const filters = { country: countryCode };
       // Solo enviar state si el país realmente tiene estados Y hay un state seleccionado
       if (countryInfo.hasStates && value.state && value.state.trim() !== '') {
         filters.state = value.state;
+      }
+      // Limpiar búsqueda y prevenir resultados viejos al cambiar de país
+      setCitySearch('');
+      // Limpiar cache local de ciudades cuando cambia el país para evitar listas parciales
+      try {
+        if (value.country) {
+          // Acceder a la instancia para limpiar ciudades de este país
+          const keyPrefix = countryCode.toUpperCase();
+          Object.keys(serviceZoneService.cache.cities || {}).forEach(k => {
+            if (k.startsWith(keyPrefix)) {
+              delete serviceZoneService.cache.cities[k];
+            }
+          });
+        }
+      } catch (e) {
+        // noop
       }
       loadCities(filters);
     } else {
@@ -335,7 +364,9 @@ const SmartLocationDropdown = ({
       countryInfo.dataStructure?.recommended_city_field === 'service_area';
 
     if (useServiceAreas) {
-      loadServiceAreas(value.country);
+      // Convertir nombre de país a código si es necesario
+      const countryCode = mapCountryNameToCode(value.country) || value.country;
+      loadServiceAreas(countryCode);
     }
   }, [
     value.country,
@@ -347,11 +378,13 @@ const SmartLocationDropdown = ({
   // Cargar códigos postales cuando cambia país/estado/ciudad/área de servicio (con manejo inteligente de países grandes)
   useEffect(() => {
     if (value.country && countryInfo.hasPostalCodes) {
-      const filters = { country: value.country };
+      // Convertir nombre de país a código si es necesario
+      const countryCode = mapCountryNameToCode(value.country) || value.country;
+      const filters = { country: countryCode };
       
       // Para países grandes, requerir al menos estado, ciudad o área de servicio
       const LARGE_COUNTRIES = ['CA', 'US', 'GB', 'DE', 'FR', 'AU', 'IN'];
-      const isLargeCountry = LARGE_COUNTRIES.includes(value.country?.toUpperCase());
+      const isLargeCountry = LARGE_COUNTRIES.includes(countryCode?.toUpperCase());
       
       // Si es un país grande y no tiene filtros específicos, no cargar automáticamente
       if (isLargeCountry && !value.state && !value.city && !value.serviceArea && !countryInfo.requiresFiltersForPostalCodes) {
@@ -373,7 +406,7 @@ const SmartLocationDropdown = ({
         setPostalCodes({
           success: false,
           requiresFilters: true,
-          message: `Para ${value.country?.toUpperCase()}, seleccione provincia/estado, ciudad o área de servicio para ver códigos postales`,
+          message: `Para ${countryCode?.toUpperCase()}, seleccione provincia/estado, ciudad o área de servicio para ver códigos postales`,
           data: []
         });
       }
@@ -517,7 +550,10 @@ const SmartLocationDropdown = ({
     options, 
     onSelect, 
     displayKey = 'name',
-    loadingType = null
+    loadingType = null,
+    onSearchChange = null,
+    totalCount = null,
+    displayFormatter = null
   ) => {
     const isLoading = loadingType ? loadingStates[loadingType] : false;
     
@@ -547,17 +583,22 @@ const SmartLocationDropdown = ({
         {isOpen && !isLoading && (
           <div className="absolute z-50 w-full mt-1 bg-white border border-gray-300 rounded-lg shadow-lg max-h-60 overflow-hidden">
             <div className="p-2 border-b">
-              <input
-                type="text"
-                value={searchValue}
-                onChange={(e) => setSearchValue(e.target.value)}
-                placeholder="Buscar..."
-                className="w-full p-2 border border-gray-200 rounded focus:outline-none focus:border-blue-500"
-                autoFocus
-              />
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={searchValue}
+                  onChange={(e) => (onSearchChange ? onSearchChange(e.target.value) : setSearchValue(e.target.value))}
+                  placeholder="Buscar..."
+                  className="flex-1 p-2 border border-gray-200 rounded focus:outline-none focus:border-blue-500"
+                  autoFocus
+                />
+                {typeof totalCount === 'number' && (
+                  <span className="text-xs text-gray-500 whitespace-nowrap">{totalCount} resultados</span>
+                )}
+              </div>
             </div>
             <div className="max-h-48 overflow-y-auto">
-              {options.length > 0 ? (
+      {options.length > 0 ? (
                 options.map((option, index) => (
                   <button
                     key={index}
@@ -565,7 +606,7 @@ const SmartLocationDropdown = ({
                     onClick={() => onSelect(option)}
                     className="w-full p-2 text-left hover:bg-blue-50 focus:bg-blue-100 focus:outline-none"
                   >
-                    {option[displayKey] || `[${displayKey} missing]`}
+        {displayFormatter ? displayFormatter(option) : (option[displayKey] || `[${displayKey} missing]`)}
                   </button>
                 ))
               ) : (
@@ -621,7 +662,11 @@ const SmartLocationDropdown = ({
           </label>
           {(() => {
             // Determinar qué datos usar según la estructura del país
-            const useServiceAreas = countryInfo.dataStructure?.recommended_city_field === 'service_area';
+            // Preferir SIEMPRE ciudades si están disponibles; para CA forzar ciudades
+            const isCA = String(value.country || '').toUpperCase() === 'CA';
+            const analysisRecommendsSA = countryInfo.dataStructure?.recommended_city_field === 'service_area';
+            const hasCityOptions = Array.isArray(filteredCities) && filteredCities.length > 0;
+            const useServiceAreas = !isCA && analysisRecommendsSA && !hasCityOptions;
             const options = useServiceAreas ? filteredServiceAreas : filteredCities;
             const searchValue = useServiceAreas ? serviceAreaSearch : citySearch;
             const setSearchValue = useServiceAreas ? setServiceAreaSearch : setCitySearch;
@@ -668,6 +713,18 @@ const SmartLocationDropdown = ({
                   setCitySearch('');
                 };
 
+            // Mostrar el conteo real de opciones visibles (ciudades o áreas)
+            const totalCount = (options && options.length) || 0;
+            const onSearchChange = useServiceAreas
+              ? (val) => setSearchValue(val)
+        : (val) => {
+                  setSearchValue(val);
+                  // Búsqueda server-side para ciudades
+          const isCA = String(value.country || '').toUpperCase() === 'CA';
+          loadCities({ country: value.country, state: isCA ? undefined : value.state, q: val, bypassCache: true });
+                };
+
+            const displayFormatter = (opt) => normalizeCityName(opt.display_name || opt.name || '');
             return renderSearchDropdown(
               openDropdown === 'city',
               () => setOpenDropdown(openDropdown === 'city' ? null : 'city'),
@@ -676,7 +733,11 @@ const SmartLocationDropdown = ({
               setSearchValue,
               options,
               handleSelect,
-              'display_name'
+              'display_name',
+              useServiceAreas ? 'serviceAreas' : 'cities',
+              onSearchChange,
+              totalCount,
+              useServiceAreas ? null : displayFormatter
             );
           })()}
         </div>

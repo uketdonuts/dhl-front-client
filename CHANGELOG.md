@@ -1,5 +1,68 @@
 # ### Fixed
 ## [Unreleased]
+
+### Fixed
+- Rate (cotizador): normalización automática de `customerDetails.*.countryCode` a ISO-3166-1 alpha-2 (2 letras) antes de enviar el request a DHL para evitar errores 422 por longitudes > 2. No se cambiaron llaves ni estructura del payload; solo se corrigen los valores.
+
+### Added
+- **🚚➡️💰 Funcionalidad Tracking a Cotización COMPLETADA**: En la pantalla de tracking, al hacer clic en "COTIZAR AHORA", ahora se copia automáticamente la información del envío a la pestaña de cotización:
+  - **Peso**: Se copia automáticamente el peso más alto para cotización (declarado, actual o dimensional)
+  - **Origen y Destino**: Se extraen y parsean las ubicaciones desde `serviceArea.description` con formato "Ciudad-CÓDIGO" (ej: "Bogota-CO", "Panama City-PA")
+  - **🔍 Validación de Códigos Postales DHL**: Análisis completo de respuesta cruda de API DHL confirma que los campos `postalCode` están SIEMPRE vacíos en tracking - DHL no proporciona esta información
+  - **🌍 Servicio de Mapeo de Países Escalable**: Nuevo servicio `countryMappingService.js` con mapeo completo de 249+ países con múltiples variaciones de nombres en español e inglés
+  - **Extracción Robusta de Datos**: Función `extractAddressData()` que explora sistemáticamente múltiples secciones del tracking result y usa `serviceArea` como fuente primaria
+  - **Parsing Inteligente Multi-formato**: La nueva función `parseLocationString()` detecta formato "Ciudad-CÓDIGO" y nombres completos usando regex y mapeo escalable
+  - **Dropdowns Pre-seleccionados**: Los SmartLocationDropdowns se llenan automáticamente con los datos del tracking usando keys dinámicas para forzar re-render
+  - **Navegación automática**: Lleva directamente a la pestaña de cotización con todos los datos pre-llenados
+  - **Notificación de confirmación**: Muestra una notificación exitosa indicando qué datos se copiaron
+  - **Sincronización robusta**: useEffect mejorado en RateTabImproved con timeout de 200ms y logs detallados
+  - **Force Update Flag**: Sistema de banderas para forzar actualización de dropdowns cuando sea necesario
+  - **Debugging mejorado**: Logs informativos con objetos completos para monitorear transferencia de datos
+- **🔧 Backend PostgreSQL**: Dependencia `psycopg2-binary==2.9.7` habilitada para desarrollo local
+- Tracking: expuestos nuevos campos en la respuesta de tracking para auditoría de pesos:
+  - `weights_summary` (shipment_total, sum_pieces, max_piece, unit, highest_for_quote)
+  - `weights_three_sums` (sum_declared, sum_actual, sum_dimensional, unit, highest_for_quote) — estilo SOAP (round-then-sum)
+  - `weights_by_piece` (por pieza: declared, actual/repesaje, dimensional, unit)
+- Tests: agregado `dhl_api/tests/test_tracking_weights.py` con 2 pruebas que imprimen 9 valores de depuración y validan los 3 pesos por pieza y los agregados. Resultado: PASS.
+ - Tracking → Nueva regla de negocio y flags para gating de cotización:
+   - Si DHL no devuelve peso volumétrico oficial (dimensional) para el tracking, el backend marca `account_requirements.needs_account_for_quote=true` y bloquea `quote_with_weight.allowed=false`.
+   - El frontend ahora deshabilita el botón "COTIZAR AHORA" y muestra CTA "Crear cuenta DHL" que navega a `/add-account`.
+   - Respuesta de API amplía con:
+     - `account_requirements`: { volumetric_from_dhl, declared_present, actual_present, needs_account_for_quote, reason, cta }
+     - `quote_with_weight`: { allowed, blocked_reason, suggested_weight, unit }
+ - Tests backend: agregado caso `test_account_gating_when_missing_dhl_volumetric` que valida los nuevos flags cuando falta peso dimensional.
+
+### Changed
+- **🚚➡️💰 Arquitectura de Mapeo de Países**: Eliminada función interna `mapCountryNameToCode()` por servicio centralizado escalable que soporta 249+ países con nombres en múltiples idiomas
+- **📍 Lógica de Extracción de Datos**: Reemplazada lógica básica de parsing por sistema multi-nivel que usa `serviceArea.description` como fuente primaria (formato "Ciudad-CÓDIGO")
+- **⚡ Extracción de Ubicaciones Backend**: Función `_extract_location_info()` optimizada para priorizar `serviceArea` sobre `postalAddress` (que está siempre vacío en tracking DHL)
+- Rounding: todos los pesos anteriores aplican `Decimal` con `ROUND_HALF_UP` a 2 decimales (por pieza antes de sumar). La selección `highest_for_quote` toma el mayor de los candidatos según el contexto (resumen y estilo SOAP).
+
+### Fixed
+- **📍 Códigos Postales**: Mejorada extracción de códigos postales desde múltiples ubicaciones en la estructura del tracking (shipment_details, route_details)
+- **🌍 Mapeo de Países Escalable**: Reemplazado hardcoding de 20+ países por servicio completo que maneja 249+ países con variaciones en español e inglés
+- **🔍 Detección Robusta de Ubicaciones**: Nueva lógica que explora sistemáticamente shipment_info, route_details y shipment_details para encontrar datos de origen/destino
+- Tracking: cálculo de peso total corregido. Ahora se muestra el mayor peso entre las piezas con redondeo estándar a 2 decimales (ROUND_HALF_UP). Ej.: si las piezas son 148.85, 120.10 y 95.00 y la respuesta traía 148.4, el sistema mostrará 148.85.
+- Rate: la cotización ahora usa el PESO EFECTIVO como el mayor entre: peso base ingresado, total_weight (si se envía), suma de piezas, suma dimensional (sum-then-round) y el mayor peso individual de las piezas. Todo con redondeo ROUND_HALF_UP a 2 decimales. Se adjunta en la respuesta `weight_selection` con el desglose para auditoría (incluye `sum_dimensional_sum_then_round` y `max_piece_dimensional`).
+- Debug tracking: `dhl_api/scripts/track_debug.py` ahora muestra ambos modos de dimensional: `sum_dimensional_sum_then_round` (recomendado) y `sum_dimensional_round_then_sum` (estilo SOAP por pieza). Ayuda a explicar diferencias como 148.84 vs 148.85.
+- Frontend SmartLocationDropdown now shows all cities for countries like CA: forces prefer=map in city API calls and avoids stale cached results.
+- LocationDropdown: muestra mensaje informativo cuando códigos postales requieren filtros (países grandes), en lugar de lista vacía.
+ - LocationDropdown: oculta selector de estado para Canadá (CA) para evitar listas parciales.
+ - LocationDropdown: usa display_name cuando está disponible para ciudades.
+ - Backend analyze_country_structure: ahora SIEMPRE recomienda `city_name` cuando esté disponible, evitando mostrar códigos de área de servicio (YMG, YHM) como “ciudad”. Cache busting con key_prefix analyze_v2.
+
+### Changed
+- serviceZoneService: include prefer=map when fetching cities and segregate cache key to ensure mapping-based lists are cached separately.
+ - serviceZoneService: al pedir códigos postales con filtros (ciudad/área/estado) incrementa `limit` para traer “todos” los rangos relevantes al dropdown.
+ - Backend get_cities_by_country_state: ahora prioriza `display_name` sobre `city_name` para mostrar nombres normalizados/amigables en los dropdowns.
+ - Backend get_cities_by_country_state: optimizado para devolver ciudades únicas por `city_name` (evita explosión por rangos postales y reduce timeouts). Soporta filtro `?q=`.
+ - DB: agregados índices en `ServiceAreaCityMap` para consultas por `(country_code, city_name)` y `(country_code, state_code, city_name)`.
+### Added
+- Gestión ESD: nuevo comando de management `esd_stats` para obtener estadísticas rápidas de ciudades por país y rangos de códigos postales por ciudad/área. Útil para validar cobertura de dropdowns.
+
+### Changed
+- Frontend ServiceZone: optimizada la carga de códigos postales. Ahora solicita page_size=1000 y, si el total es pequeño (<= 5 páginas), pre-carga todas las páginas y consolida resultados para que el dropdown muestre “todos” los rangos en países medianos sin interacción extra.
+
 ### Fixed
 - Payloads: eliminado duplicado de campos postal_code/postalCode y service_area/ServiceArea en requests
   - Rate: se mantiene postal_code (snake_case) y se eliminan alias redundantes
@@ -224,6 +287,18 @@ El formato está basado en [Keep a Changelog](https://keepachangelog.com/es/1.0.
 y este proyecto se adhiere al [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
+### Added
+- CountryISO: nueva tabla/catalogo ISO de países para normalizar nombres (código alpha-2 → nombre ISO) y metadatos (moneda, numeric code, etc.).
+- Comando de management `load_iso_countries` para cargar/actualizar CountryISO desde `dhl_api/ISO_Country_Codes_fullset_*.csv` (upsert, opción `--clear`).
+
+### Changed
+- Endpoints de ubicaciones (países/estados/ciudades/áreas/códigos postales) ahora usan `ServiceAreaCityMap` como fuente de verdad para el UI; `CountryISO` se usa para normalizar nombres de países.
+- `get_cities_by_country_state`: para CA se ignora el filtro de estado para listar todas las ciudades/áreas mapeadas y evitar listas parciales (como 13 items).
+- `load_esd_data`: normaliza `country_name` a partir de `CountryISO` al cargar ESD.TXT (consistencia de nombres).
+
+### Deprecated
+- Uso de `ServiceZone` (ESD) como fuente para dropdowns del UI. Los datos ESD siguen en DB para referencia/consulta, pero los endpoints ya no hacen fallback a ESD.
+
 ### Added
 - **� Headers mejorados para ePOD API**: 
   - Nuevo método `_get_epod_headers()` con todos los headers recomendados por DHL

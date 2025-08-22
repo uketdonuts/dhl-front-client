@@ -11,6 +11,7 @@ import ShipmentTab from './dashboard/ShipmentTab';
 import TrackingTab from './dashboard/TrackingTab';
 import EpodTab from './dashboard/EpodTab';
 import { formatPostalCode, normalizePayloadLocations, normalizeShipmentParties } from '../utils/dhlValidations';
+import { useNavigate } from 'react-router-dom';
 
 // Componente para mostrar errores específicos de DHL
 const DhlErrorAlert = ({ error, onDismiss }) => {
@@ -95,6 +96,7 @@ const ValidationWarnings = ({ warnings, onDismiss }) => {
 
 const Dashboard = ({ selectedAccount = null, setSelectedAccount }) => {
   const { isAuthenticated, user } = useAuth();
+  const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState('rate');
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
@@ -194,6 +196,31 @@ const Dashboard = ({ selectedAccount = null, setSelectedAccount }) => {
   const [trackingResult, setTrackingResult] = useState(null);
   const [trackingLoading, setTrackingLoading] = useState(false);
   const [trackingError, setTrackingError] = useState('');
+  // Flujo de cotización desde Tracking
+  const [quoteBusy, setQuoteBusy] = useState(false);
+  const [quoteStatus, setQuoteStatus] = useState('');
+  const [showAccountForQuoteModal, setShowAccountForQuoteModal] = useState(false);
+  const [accountForQuoteInput, setAccountForQuoteInput] = useState('');
+  // Toast ligero
+  const [miniToast, setMiniToast] = useState(null); // { message, type }
+
+  const showMiniToast = (message, type = 'info', duration = 3000) => {
+    setMiniToast({ message, type });
+    setTimeout(() => setMiniToast(null), duration);
+  };
+
+  const addAccountToLocalUnique = (account) => {
+    try {
+      const key = 'dhl_accounts';
+      const stored = JSON.parse(localStorage.getItem(key)) || [];
+      if (!stored.includes(account)) {
+        const updated = [account, ...stored];
+        localStorage.setItem(key, JSON.stringify(updated));
+      }
+    } catch (_) {
+      // no-op
+    }
+  };
   
   // Estados para ePOD (Proof of Delivery)
   const [epodTrackingNumber, setEpodTrackingNumber] = useState('');
@@ -602,7 +629,7 @@ const Dashboard = ({ selectedAccount = null, setSelectedAccount }) => {
     setTrackingError('');
     setTrackingResult(null);
 
-    try {
+  try {
       const requestData = { 
         tracking_number: trackingNumber.trim()
       };
@@ -611,16 +638,95 @@ const Dashboard = ({ selectedAccount = null, setSelectedAccount }) => {
         requestData.account_number = selectedAccount;
       }
 
-      const response = await axios.post('/api/dhl/tracking/', 
-        requestData, 
-        { headers: getAuthHeaders() }
-      );
-      
-      setTrackingResult(response.data);
+  const response = await axios.post('/api/dhl/tracking/', requestData, { headers: getAuthHeaders() });
+  // Mostrar siempre el resultado; la solicitud de cuenta se hará al momento de cotizar
+  setTrackingResult(response.data);
     } catch (err) {
       setTrackingError(err.response?.data?.message || 'Error al rastrear el envío');
     } finally {
       setTrackingLoading(false);
+    }
+  };
+
+  // Flujo: cotizar desde tracking
+  const proceedToRate = (responseData) => {
+    try {
+      const weightForQuote = (
+        responseData?.quote_with_weight?.suggested_weight ??
+        responseData?.weights_three_sums?.highest_for_quote ??
+        responseData?.weights_summary?.highest_for_quote ??
+        0
+      );
+      if (weightForQuote <= 0) {
+        setQuoteStatus('No se pudo determinar un peso válido para cotizar.');
+        return;
+      }
+      // Copiar pesos al formulario de cotización y navegar
+      updateRateData('weight', weightForQuote);
+      updateRateData('declared_weight', weightForQuote);
+      setActiveTab('rate');
+      setNotification({
+        type: 'success',
+        message: 'Peso listo para cotizar',
+        details: `Se usará ${weightForQuote.toFixed(2)} kg (mayor entre declarado, actual y dimensional)`
+      });
+      setTimeout(() => setNotification(null), 3500);
+    } catch (_) {
+      setQuoteStatus('Ocurrió un problema preparando la cotización.');
+    }
+  };
+
+  const handleQuoteFromTracking = () => {
+    if (!trackingResult) return;
+    setQuoteStatus('');
+    const volumetricFromDhl = trackingResult?.account_requirements?.volumetric_from_dhl;
+    if (volumetricFromDhl === false) {
+      setAccountForQuoteInput(selectedAccount || '');
+      setShowAccountForQuoteModal(true);
+      setQuoteStatus('Se requiere cuenta DHL para calcular peso volumétrico.');
+      return;
+    }
+    proceedToRate(trackingResult);
+  };
+
+  const confirmAccountForQuote = async () => {
+    if (!trackingNumber?.trim()) return;
+    if (!accountForQuoteInput?.trim()) {
+      setQuoteStatus('Ingresa tu cuenta DHL para continuar.');
+      return;
+    }
+    try {
+      setQuoteBusy(true);
+      setQuoteStatus('Verificando cuenta y recalculando pesos...');
+      const requestData = {
+        tracking_number: trackingNumber.trim(),
+        account_number: accountForQuoteInput.trim()
+      };
+      const response = await axios.post('/api/dhl/tracking/', requestData, { headers: getAuthHeaders() });
+      setTrackingResult(response.data);
+      const volumetricFromDhl = response?.data?.account_requirements?.volumetric_from_dhl;
+      if (volumetricFromDhl === false) {
+        // Aún no se logró obtener el volumétrico con esta cuenta
+        setQuoteBusy(false);
+        setQuoteStatus('No se obtuvo peso volumétrico con esta cuenta. Revisa e intenta nuevamente.');
+        showMiniToast('No se obtuvo peso volumétrico con esta cuenta', 'warning');
+        return;
+      }
+      // Éxito: guardar cuenta (sin duplicados) y continuar
+      addAccountToLocalUnique(accountForQuoteInput.trim());
+      if (typeof setSelectedAccount === 'function') {
+        setSelectedAccount(accountForQuoteInput.trim());
+      }
+      showMiniToast('Cuenta guardada', 'success');
+      setShowAccountForQuoteModal(false);
+      setQuoteBusy(false);
+      setQuoteStatus('Listo.');
+      proceedToRate(response.data);
+    } catch (err) {
+      setQuoteBusy(false);
+      const msg = err?.response?.data?.message || 'Error validando cuenta o recalculando.';
+      setQuoteStatus(msg);
+      showMiniToast('Error validando cuenta o recalculando', 'error');
     }
   };
 
@@ -1339,6 +1445,11 @@ const Dashboard = ({ selectedAccount = null, setSelectedAccount }) => {
             translateStatus={translateStatus}
             onNavigateToRate={navigateToRate}
             updateRateData={updateRateData}
+            updateAddress={updateAddress}
+            setNotification={setNotification}
+            onQuoteClick={handleQuoteFromTracking}
+            quoteBusy={quoteBusy}
+            quoteStatus={quoteStatus}
           />
          )}
 
@@ -1367,6 +1478,61 @@ const Dashboard = ({ selectedAccount = null, setSelectedAccount }) => {
         onClose={() => setContactModalOpen(false)}
         onSelectContact={handleContactSelect}
       />
+
+      {/* Modal: ingresar cuenta DHL para cotizar (si falta peso volumétrico) */}
+      {showAccountForQuoteModal && (
+        <div className="fixed inset-0 z-50 flex items-end md:items-center justify-center bg-black bg-opacity-40">
+          <div className="w-full md:w-auto md:min-w-[420px] bg-white rounded-t-2xl md:rounded-2xl shadow-xl p-5 md:p-6">
+            <div className="flex items-start">
+              <div className="bg-yellow-100 text-yellow-700 rounded-lg px-3 py-2 mr-3">⚠️</div>
+              <div className="flex-1">
+                <h3 className="text-base md:text-lg font-semibold text-gray-900">Cuenta necesaria para calcular peso volumétrico</h3>
+                <p className="mt-1 text-sm text-gray-600">Ingresa tu cuenta DHL para recalcular con todos los pesos.</p>
+              </div>
+            </div>
+            <div className="mt-4 space-y-3">
+              <input
+                type="text"
+                value={accountForQuoteInput}
+                onChange={(e) => setAccountForQuoteInput(e.target.value)}
+                placeholder="Número de cuenta DHL"
+                className="w-full border rounded-xl px-3 py-2"
+                disabled={quoteBusy}
+              />
+              {quoteStatus && (
+                <p className="text-xs text-gray-600">{quoteStatus}</p>
+              )}
+              <div className="grid grid-cols-2 gap-3">
+                <button
+                  onClick={() => setShowAccountForQuoteModal(false)}
+                  className="w-full py-3 rounded-xl font-semibold bg-gray-100 text-gray-700"
+                  disabled={quoteBusy}
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={confirmAccountForQuote}
+                  className={`w-full py-3 rounded-xl font-semibold text-white ${quoteBusy ? 'bg-gray-400' : 'bg-dhl-red'}`}
+                  disabled={quoteBusy}
+                >
+                  {quoteBusy ? 'Recalculando…' : 'Continuar'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Mini Toast */}
+      {miniToast && (
+        <div className={`fixed bottom-4 right-4 z-50 px-3 py-2 rounded-lg shadow text-xs ${
+          miniToast.type === 'success' ? 'bg-green-600 text-white' :
+          miniToast.type === 'warning' ? 'bg-yellow-500 text-black' :
+          miniToast.type === 'error' ? 'bg-red-600 text-white' : 'bg-gray-800 text-white'
+        }`}>
+          {miniToast.message}
+        </div>
+      )}
     </div>
   );
 };

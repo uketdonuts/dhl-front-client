@@ -89,7 +89,7 @@ const ValidationNumberInput = ({
       if (field === 'weight') {
         if (numValue > 1000) {
           setWarning('Peso muy alto - Verificar unidades (kg)');
-        } else if (numValue < 0.1) {
+        } else if (numValue < 0.01) {
           setWarning('Peso muy bajo - Verificar unidades (kg)');
         }
       }

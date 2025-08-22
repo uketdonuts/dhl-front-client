@@ -56,6 +56,11 @@ class RateRequestSerializer(serializers.Serializer):
     origin = serializers.DictField()
     destination = serializers.DictField()
     weight = serializers.FloatField()
+    # Opcional: permitir informar el peso total o piezas para calcular el peso efectivo de cotización
+    total_weight = serializers.FloatField(required=False, allow_null=True,
+                                          help_text="Peso total a usar en la cotización (prioritario si se envía)")
+    pieces = serializers.ListField(child=serializers.DictField(), required=False,
+                                   help_text="Lista de piezas con al menos 'weight' para calcular el peso total")
     dimensions = serializers.DictField()
     declared_weight = serializers.FloatField(required=False, allow_null=True,
                                            help_text="Peso declarado en kg (opcional)")

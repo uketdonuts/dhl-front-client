@@ -2,6 +2,7 @@ import React from 'react';
 import PropTypes from 'prop-types';
 import useFormValidation from '../../hooks/useFormValidation';
 import FormValidationStatus from '../FormValidationStatus';
+import { mapCountryNameToCode, mapCodeToCountryName } from '../../utils/countryMappingService';
 
 /**
  * Componente para la pestaña de Rastreo con funcionalidad completa
@@ -15,7 +16,12 @@ const TrackingTab = ({
   trackingResult,
   translateStatus,
   onNavigateToRate,
-  updateRateData
+  updateRateData,
+  updateAddress,
+  setNotification,
+  onQuoteClick,
+  quoteBusy,
+  quoteStatus
 }) => {
   // ✅ Usar hook de validación para tracking
   const validation = useFormValidation({ tracking_number: trackingNumber }, 'tracking');
@@ -99,12 +105,12 @@ const TrackingTab = ({
           </div>
         )}
 
-        {/* Mostrar resultados de tracking */}
+        {/* Mostrar resultados de tracking - Versión simplificada */}
         {trackingResult && (
           <div className="space-y-6">
-            {/* Header del tracking con estado mejorado */}
+            {/* Header del tracking simplificado */}
             <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-xl p-6 shadow-sm">
-              <div className="flex items-start justify-between mb-6">
+              <div className="flex items-center justify-between mb-4">
                 <div className="flex items-center">
                   <div className="bg-blue-100 p-3 rounded-xl mr-4">
                     <svg className="w-8 h-8 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -117,94 +123,155 @@ const TrackingTab = ({
                     </h3>
                     <div className="flex items-center space-x-2">
                       <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium ${
-                        trackingResult.tracking_info?.status_description === 'Delivered' ? 'bg-green-100 text-green-800' : 
-                        trackingResult.tracking_info?.status_description === 'In Transit' ? 'bg-blue-100 text-blue-800' : 
-                        trackingResult.tracking_info?.status_description === 'Out for Delivery' ? 'bg-purple-100 text-purple-800' :
+                        trackingResult.status?.includes('Delivered') ? 'bg-green-100 text-green-800' : 
+                        trackingResult.status?.includes('Transit') ? 'bg-blue-100 text-blue-800' : 
                         'bg-orange-100 text-orange-800'
                       }`}>
-                        {trackingResult.tracking_info?.status_description === 'Delivered' && '✅'}
-                        {trackingResult.tracking_info?.status_description === 'In Transit' && '🚛'}
-                        {trackingResult.tracking_info?.status_description === 'Out for Delivery' && '🚚'}
-                        {trackingResult.tracking_info?.status_description ? translateStatus(trackingResult.tracking_info.status_description) : 'No disponible'}
+                        {trackingResult.status?.includes('Delivered') && '✅'}
+                        {trackingResult.status?.includes('Transit') && '🚛'}
+                        {translateStatus(trackingResult.status || 'No disponible')}
                       </span>
                     </div>
                   </div>
                 </div>
-                
-                {/* Botón de cotizar con repesaje */}
-                {trackingResult.piece_details && trackingResult.piece_details.length > 0 && 
-                 trackingResult.piece_details[0].weight_info && 
-                 trackingResult.piece_details[0].weight_info.actual_weight_reweigh && (
-                  <button
-                    onClick={() => {
-                      const piece = trackingResult.piece_details[0];
-                      const actualWeight = piece.weight_info.actual_weight_reweigh;
-                      // Cambiar a la pestaña de cotización y prellenar peso
-                      if (onNavigateToRate && updateRateData) {
-                        onNavigateToRate();
-                        updateRateData('weight', actualWeight);
-                        updateRateData('declared_weight', actualWeight);
-                      }
-                    }}
-                    className="bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 text-white px-4 py-2 rounded-lg font-medium shadow-sm transition-all duration-200 flex items-center space-x-2"
-                  >
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1" />
-                    </svg>
-                    <span>Cotizar con {trackingResult.piece_details[0].weight_info.actual_weight_reweigh}kg</span>
-                  </button>
-                )}
-              </div>
-              
-              {/* Grid de información básica */}
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                {trackingResult.tracking_info && (
-                  <>
-                    <div className="bg-white/70 backdrop-blur rounded-lg p-3">
-                      <div className="flex items-center mb-1">
-                        <svg className="w-4 h-4 mr-2 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
-                        </svg>
-                        <span className="text-sm font-medium text-gray-700">Origen</span>
-                      </div>
-                      <div className="text-gray-900 font-medium">{trackingResult.tracking_info.origin || 'No disponible'}</div>
-                    </div>
-                    
-                    <div className="bg-white/70 backdrop-blur rounded-lg p-3">
-                      <div className="flex items-center mb-1">
-                        <svg className="w-4 h-4 mr-2 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
-                        </svg>
-                        <span className="text-sm font-medium text-gray-700">Destino</span>
-                      </div>
-                      <div className="text-gray-900 font-medium">{trackingResult.tracking_info.destination || 'No disponible'}</div>
-                    </div>
-                    
-                    <div className="bg-white/70 backdrop-blur rounded-lg p-3">
-                      <div className="flex items-center mb-1">
-                        <svg className="w-4 h-4 mr-2 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
-                        </svg>
-                        <span className="text-sm font-medium text-gray-700">Servicio</span>
-                      </div>
-                      <div className="text-gray-900 font-medium">{trackingResult.tracking_info.service_type || 'No disponible'}</div>
-                    </div>
-                    
-                    <div className="bg-white/70 backdrop-blur rounded-lg p-3">
-                      <div className="flex items-center mb-1">
-                        <svg className="w-4 h-4 mr-2 text-orange-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3a2 2 0 012-2h4a2 2 0 012 2v4m-6 4V7a2 2 0 012-2h4a2 2 0 012 2v4.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                        </svg>
-                        <span className="text-sm font-medium text-gray-700">Peso Total</span>
-                      </div>
-                      <div className="text-gray-900 font-medium">{trackingResult.tracking_info.total_weight || 0} {trackingResult.tracking_info.weight_unit || 'kg'}</div>
-                    </div>
-                  </>
-                )}
               </div>
             </div>
+
+            {/* Sección principal: Desglose de pesos y cotización */}
+            {(trackingResult.weights_summary || trackingResult.weights_three_sums || trackingResult.weights_by_piece) && (
+              <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm">
+                <h4 className="text-xl font-semibold text-gray-900 mb-6 flex items-center">
+                  <div className="bg-orange-100 p-2 rounded-lg mr-3">
+                    <svg className="w-6 h-6 text-orange-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 6l3 1m0 0l-3 9a5.002 5.002 0 006.001 0M6 7l3 9M6 7l6-2m6 2l3-1m-3 1l-3 9a5.002 5.002 0 006.001 0M18 7l3 9m-3-9l-6-2m0-2v2m0 16V5m0 16l3-3m-3 3l-3-3" />
+                    </svg>
+                  </div>
+                  Análisis de Pesos para Cotización
+                </h4>
+
+                {/* Peso Total Final - destacado */}
+        {(trackingResult.weights_summary?.highest_for_quote || trackingResult.weights_three_sums?.highest_for_quote) && (
+                  <div className="bg-gradient-to-r from-green-50 to-emerald-50 border border-green-200 rounded-xl p-6 mb-6">
+          <div className="flex items-center justify-between gap-4 flex-wrap">
+                      <div className="flex items-center space-x-4">
+                        <div className="bg-green-100 p-3 rounded-xl">
+                          <svg className="w-8 h-8 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z" />
+                          </svg>
+                        </div>
+                        <div>
+                          <h3 className="text-lg font-semibold text-gray-900">PESO TOTAL PARA COTIZACIÓN</h3>
+                          <div className="text-3xl font-bold text-green-800">
+                            {(trackingResult.weights_three_sums?.highest_for_quote || trackingResult.weights_summary?.highest_for_quote || 0).toFixed(2)} KG
+                          </div>
+                          <div className="text-sm text-green-600 mt-1">
+                            Este es el peso más alto entre declarado, actual y dimensional
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* CTA: Cotizar con este peso (flujo de cuenta ocurre al presionar) */}
+                      <div className="flex items-center space-x-3 ml-auto">
+                        <button
+                          onClick={onQuoteClick}
+                          disabled={quoteBusy}
+                          className={`px-4 py-3 rounded-xl font-semibold text-white shadow ${quoteBusy ? 'bg-gray-400' : 'bg-dhl-red hover:bg-red-700'} transition`}
+                          title="Cotizar usando el peso más alto"
+                        >
+                          {quoteBusy ? 'Preparando…' : 'Cotizar con este peso'}
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Mensaje de estado pequeño */}
+                    {quoteStatus && (
+                      <p className="mt-2 text-xs text-gray-600">{quoteStatus}</p>
+                    )}
+                  </div>
+                )}
+
+                {/* Desglose de pesos por pieza */}
+                {trackingResult.weights_by_piece && trackingResult.weights_by_piece.length > 0 && (
+                  <div className="space-y-4">
+                    <h5 className="text-lg font-semibold text-gray-800 mb-4">
+                      📦 Pesos por Pieza ({trackingResult.weights_by_piece.length})
+                    </h5>
+                    <div className="space-y-3">
+                      {trackingResult.weights_by_piece.map((piece, index) => (
+                        <div key={index} className="bg-gray-50 border border-gray-200 rounded-lg p-4">
+                          <div className="flex items-center justify-between mb-3">
+                            <div className="flex items-center space-x-2">
+                              <div className="bg-blue-100 text-blue-700 rounded-lg px-3 py-1 font-semibold text-sm">
+                                Pieza #{piece.index + 1}
+                              </div>
+                              {piece.piece_id && (
+                                <div className="text-xs text-gray-500 bg-white px-2 py-1 rounded border">
+                                  {piece.piece_id}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                          
+                          {/* Grid de 3 pesos por pieza */}
+                          <div className="grid grid-cols-3 gap-3">
+                            <div className="text-center bg-blue-50 rounded-lg p-3 border border-blue-200">
+                              <div className="text-xs text-blue-600 font-medium mb-1">DECLARADO</div>
+                              <div className="text-xl font-bold text-blue-800">
+                                {piece.declared ? piece.declared.toFixed(2) : '0.00'}
+                              </div>
+                              <div className="text-xs text-blue-600">{piece.unit}</div>
+                            </div>
+                            
+                            <div className="text-center bg-orange-50 rounded-lg p-3 border border-orange-200">
+                              <div className="text-xs text-orange-600 font-medium mb-1">ACTUAL</div>
+                              <div className="text-xl font-bold text-orange-800">
+                                {piece.actual ? piece.actual.toFixed(2) : '0.00'}
+                              </div>
+                              <div className="text-xs text-orange-600">{piece.unit}</div>
+                            </div>
+                            
+                            <div className="text-center bg-green-50 rounded-lg p-3 border border-green-200">
+                              <div className="text-xs text-green-600 font-medium mb-1">DIMENSIONAL</div>
+                              <div className="text-xl font-bold text-green-800">
+                                {piece.dimensional ? piece.dimensional.toFixed(2) : '0.00'}
+                              </div>
+                              <div className="text-xs text-green-600">{piece.unit}</div>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Resumen de totales */}
+                {trackingResult.weights_three_sums && (
+                  <div className="mt-6 bg-gray-50 rounded-lg p-4 border border-gray-200">
+                    <h5 className="font-semibold text-gray-800 mb-3">📊 Totales por Tipo de Peso</h5>
+                    <div className="grid grid-cols-3 gap-4">
+                      <div className="text-center">
+                        <div className="text-sm text-gray-600 mb-1">Total Declarado</div>
+                        <div className="text-lg font-bold text-blue-800">
+                          {trackingResult.weights_three_sums.sum_declared.toFixed(2)} KG
+                        </div>
+                      </div>
+                      <div className="text-center">
+                        <div className="text-sm text-gray-600 mb-1">Total Actual</div>
+                        <div className="text-lg font-bold text-orange-800">
+                          {trackingResult.weights_three_sums.sum_actual.toFixed(2)} KG
+                        </div>
+                      </div>
+                      <div className="text-center">
+                        <div className="text-sm text-gray-600 mb-1">Total Dimensional</div>
+                        <div className="text-lg font-bold text-green-800">
+                          {trackingResult.weights_three_sums.sum_dimensional.toFixed(2)} KG
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Historial de eventos */}
             {trackingResult.events && trackingResult.events.length > 0 && (
@@ -235,295 +302,6 @@ const TrackingTab = ({
                 </div>
               </div>
             )}
-
-            {/* Información adicional y detalles completos */}
-            {trackingResult.tracking_info && (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                {/* Detalles del servicio */}
-                <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
-                  <h4 className="text-lg font-medium text-gray-800 mb-3 flex items-center">
-                    <svg className="w-5 h-5 mr-2 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3a4 4 0 118 0v4m-4 8a3 3 0 100-6 3 3 0 000 6z" />
-                    </svg>
-                    Detalles del Servicio
-                  </h4>
-                  <div className="space-y-2 text-sm">
-                    {trackingResult.tracking_info.service_name && (
-                      <div className="flex justify-between">
-                        <span className="font-medium text-gray-700">Servicio:</span>
-                        <span className="text-gray-600">{trackingResult.tracking_info.service_name}</span>
-                      </div>
-                    )}
-                    {trackingResult.tracking_info.description && (
-                      <div className="flex justify-between">
-                        <span className="font-medium text-gray-700">Descripción:</span>
-                        <span className="text-gray-600">{trackingResult.tracking_info.description}</span>
-                      </div>
-                    )}
-                    {trackingResult.tracking_info.shipment_timestamp && (
-                      <div className="flex justify-between">
-                        <span className="font-medium text-gray-700">Fecha Envío:</span>
-                        <span className="text-gray-600">{trackingResult.tracking_info.shipment_timestamp}</span>
-                      </div>
-                    )}
-                    {trackingResult.tracking_info.estimated_delivery && (
-                      <div className="flex justify-between">
-                        <span className="font-medium text-gray-700">Entrega Estimada:</span>
-                        <span className="text-gray-600">{trackingResult.tracking_info.estimated_delivery}</span>
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                {/* Información de peso y piezas */}
-                <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
-                  <h4 className="text-lg font-medium text-gray-800 mb-3 flex items-center">
-                    <svg className="w-5 h-5 mr-2 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
-                    </svg>
-                    Información del Paquete
-                  </h4>
-                  <div className="space-y-2 text-sm">
-                    <div className="flex justify-between">
-                      <span className="font-medium text-gray-700">Número de Piezas:</span>
-                      <span className="text-gray-600">{trackingResult.total_pieces || trackingResult.tracking_info.number_of_pieces || 'No especificado'}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="font-medium text-gray-700">Peso Total:</span>
-                      <span className="text-gray-600">
-                        {trackingResult.tracking_info.total_weight > 0 
-                          ? `${trackingResult.tracking_info.total_weight} ${trackingResult.tracking_info.weight_unit}` 
-                          : 'No especificado'}
-                      </span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="font-medium text-gray-700">Eventos de Tracking:</span>
-                      <span className="text-gray-600">{trackingResult.total_events || 0} eventos</span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Detalles de origen y destino expandidos */}
-            {trackingResult.tracking_info && (trackingResult.tracking_info.origin_details || trackingResult.tracking_info.destination_details) && (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                {/* Información detallada del origen */}
-                {trackingResult.tracking_info.origin_details && (
-                  <div className="bg-green-50 border border-green-200 rounded-lg p-4">
-                    <h4 className="text-lg font-medium text-green-800 mb-3 flex items-center">
-                      <svg className="w-5 h-5 mr-2 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
-                      </svg>
-                      Origen Detallado
-                    </h4>
-                    <div className="space-y-2 text-sm">
-                      <div><span className="font-medium">Ubicación:</span> {trackingResult.tracking_info.origin_details.description}</div>
-                      {trackingResult.tracking_info.origin_details.code && (
-                        <div><span className="font-medium">Código:</span> {trackingResult.tracking_info.origin_details.code}</div>
-                      )}
-                      {trackingResult.tracking_info.origin_details.full_address && (
-                        <div><span className="font-medium">Dirección:</span> {trackingResult.tracking_info.origin_details.full_address}</div>
-                      )}
-                    </div>
-                  </div>
-                )}
-
-                {/* Información detallada del destino */}
-                {trackingResult.tracking_info.destination_details && (
-                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-                    <h4 className="text-lg font-medium text-blue-800 mb-3 flex items-center">
-                      <svg className="w-5 h-5 mr-2 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
-                      </svg>
-                      Destino Detallado
-                    </h4>
-                    <div className="space-y-2 text-sm">
-                      <div><span className="font-medium">Ubicación:</span> {trackingResult.tracking_info.destination_details.description}</div>
-                      {trackingResult.tracking_info.destination_details.code && (
-                        <div><span className="font-medium">Código:</span> {trackingResult.tracking_info.destination_details.code}</div>
-                      )}
-                      {trackingResult.tracking_info.destination_details.full_address && (
-                        <div><span className="font-medium">Dirección:</span> {trackingResult.tracking_info.destination_details.full_address}</div>
-                      )}
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Detalles de piezas individuales - Layout compacto y mejorado */}
-            {trackingResult.piece_details && trackingResult.piece_details.length > 0 && (
-              <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-sm">
-                <h4 className="text-xl font-semibold text-gray-900 mb-6 flex items-center">
-                  <div className="bg-gray-100 p-2 rounded-lg mr-3">
-                    <svg className="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
-                    </svg>
-                  </div>
-                  Información de Paquetes ({trackingResult.piece_details.length})
-                </h4>
-                
-                <div className="space-y-4">
-                  {trackingResult.piece_details.map((piece, index) => (
-                    <div key={index} className="bg-gradient-to-br from-gray-50 to-blue-50 border border-gray-200 rounded-xl p-6 hover:shadow-lg transition-all duration-300">
-                      
-                      {/* Header del paquete */}
-                      <div className="flex items-center justify-between mb-4">
-                        <div className="flex items-center space-x-3">
-                          <div className="bg-blue-100 text-blue-700 rounded-lg px-3 py-2 font-semibold">
-                            📦 Paquete #{index + 1}
-                          </div>
-                          {piece.piece_id && (
-                            <div className="text-xs text-gray-500 bg-white px-3 py-1 rounded-full border">
-                              {piece.piece_id}
-                            </div>
-                          )}
-                        </div>
-                        
-                        {/* Indicador de repesaje prominente */}
-                        {piece.weight_info && piece.weight_info.declared_weight !== piece.weight_info.actual_weight_reweigh && (
-                          <div className="bg-gradient-to-r from-orange-500 to-orange-600 text-white px-4 py-2 rounded-full text-sm font-semibold flex items-center space-x-2 shadow-md">
-                            <span>⚖️</span>
-                            <span>Repesaje DHL</span>
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Layout principal mejorado */}
-                      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                        
-                        {/* Sección 1: Información de Peso (Principal) */}
-                        {piece.weight_info ? (
-                          <div className="lg:col-span-2 bg-white rounded-xl p-5 shadow-sm border">
-                            <div className="flex items-center mb-4">
-                              <div className="bg-blue-100 p-2 rounded-lg mr-3">
-                                <svg className="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 6l3 1m0 0l-3 9a5.002 5.002 0 006.001 0M6 7l3 9M6 7l6-2m6 2l3-1m-3 1l-3 9a5.002 5.002 0 006.001 0M18 7l3 9m-3-9l-6-2m0-2v2m0 16V5m0 16l3-3m-3 3l-3-3" />
-                                </svg>
-                              </div>
-                              <h5 className="text-lg font-semibold text-gray-800">Desglose de Peso</h5>
-                            </div>
-                            
-                            {/* Grid de pesos */}
-                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
-                              <div className="text-center bg-blue-50 rounded-lg p-3 border border-blue-200">
-                                <div className="text-xs text-blue-600 font-medium mb-1">DECLARADO</div>
-                                <div className="text-2xl font-bold text-blue-800">{piece.weight_info.declared_weight}</div>
-                                <div className="text-xs text-blue-600">{piece.weight_info.unit}</div>
-                              </div>
-                              
-                              <div className="text-center bg-orange-50 rounded-lg p-3 border border-orange-200">
-                                <div className="text-xs text-orange-600 font-medium mb-1">REAL (DHL)</div>
-                                <div className="text-2xl font-bold text-orange-800">{piece.weight_info.actual_weight_reweigh}</div>
-                                <div className="text-xs text-orange-600">{piece.weight_info.unit}</div>
-                              </div>
-                              
-                              <div className="text-center bg-green-50 rounded-lg p-3 border border-green-200">
-                                <div className="text-xs text-green-600 font-medium mb-1">FACTURABLE</div>
-                                <div className="text-2xl font-bold text-green-800">{piece.weight_info.chargeable_weight}</div>
-                                <div className="text-xs text-green-600">{piece.weight_info.unit}</div>
-                              </div>
-                            </div>
-                            
-                            {/* Diferencia y botón de cotizar */}
-                            {piece.weight_info.declared_weight !== piece.weight_info.actual_weight_reweigh && (
-                              <div className="bg-gray-50 rounded-lg p-4 border-l-4 border-red-400">
-                                <div className="flex items-center justify-between mb-3">
-                                  <div className="flex items-center space-x-2">
-                                    <span className="text-2xl">
-                                      {piece.weight_info.declared_weight > piece.weight_info.actual_weight_reweigh ? '📉' : '📈'}
-                                    </span>
-                                    <div>
-                                      <div className="font-semibold text-red-800">Diferencia de Peso</div>
-                                      <div className="text-lg font-bold text-red-900">
-                                        {Math.abs(piece.weight_info.declared_weight - piece.weight_info.actual_weight_reweigh).toFixed(2)} {piece.weight_info.unit}
-                                      </div>
-                                    </div>
-                                  </div>
-                                </div>
-                                
-                                {/* Botón de cotizar prominente */}
-                                <button
-                                  onClick={() => {
-                                    if (onNavigateToRate && updateRateData) {
-                                      onNavigateToRate();
-                                      updateRateData('weight', piece.weight_info.actual_weight_reweigh);
-                                      updateRateData('declared_weight', piece.weight_info.actual_weight_reweigh);
-                                    }
-                                  }}
-                                  className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white px-4 py-3 rounded-lg font-semibold transition-all duration-200 flex items-center justify-center space-x-2 shadow-md hover:shadow-lg transform hover:scale-105"
-                                >
-                                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1" />
-                                  </svg>
-                                  <span>Cotizar con Peso Real ({piece.weight_info.actual_weight_reweigh} {piece.weight_info.unit})</span>
-                                </button>
-                              </div>
-                            )}
-                          </div>
-                        ) : (
-                          piece.weight > 0 && (
-                            <div className="lg:col-span-2 bg-white rounded-xl p-5 shadow-sm border">
-                              <h5 className="font-semibold text-gray-800 mb-2">Información de Peso</h5>
-                              <div className="text-2xl font-bold text-gray-900">{piece.weight} {piece.weight_unit}</div>
-                            </div>
-                          )
-                        )}
-
-                        {/* Sección 2: Información Adicional (Lateral) */}
-                        <div className="space-y-4">
-                          {piece.dimensions && (piece.dimensions.length > 0 || piece.dimensions.width > 0 || piece.dimensions.height > 0) && (
-                            <div className="bg-white rounded-lg p-4 shadow-sm border">
-                              <div className="flex items-center mb-2">
-                                <svg className="w-4 h-4 mr-2 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
-                                </svg>
-                                <span className="text-sm font-semibold text-gray-700">Dimensiones</span>
-                              </div>
-                              <div className="text-center bg-indigo-50 rounded-lg p-3">
-                                <div className="font-bold text-indigo-800 text-lg font-mono">
-                                  {piece.dimensions.length} × {piece.dimensions.width} × {piece.dimensions.height}
-                                </div>
-                                <div className="text-xs text-indigo-600">cm</div>
-                              </div>
-                            </div>
-                          )}
-                          
-                          {piece.type_code && (
-                            <div className="bg-white rounded-lg p-4 shadow-sm border">
-                              <div className="flex items-center mb-2">
-                                <svg className="w-4 h-4 mr-2 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" />
-                                </svg>
-                                <span className="text-sm font-semibold text-gray-700">Tipo de Paquete</span>
-                              </div>
-                              <div className="text-center bg-purple-50 rounded-lg p-2">
-                                <div className="font-semibold text-purple-800">{piece.type_code}</div>
-                              </div>
-                            </div>
-                          )}
-                          
-                          {piece.description && (
-                            <div className="bg-white rounded-lg p-4 shadow-sm border">
-                              <div className="flex items-center mb-2">
-                                <svg className="w-4 h-4 mr-2 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                                </svg>
-                                <span className="text-sm font-semibold text-gray-700">Descripción</span>
-                              </div>
-                              <div className="text-sm text-gray-800 bg-gray-50 rounded p-2">{piece.description}</div>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
           </div>
         )}
       </div>
@@ -540,14 +318,24 @@ TrackingTab.propTypes = {
   trackingResult: PropTypes.object,
   translateStatus: PropTypes.func.isRequired,
   onNavigateToRate: PropTypes.func,
-  updateRateData: PropTypes.func
+  updateRateData: PropTypes.func,
+  updateAddress: PropTypes.func,
+  setNotification: PropTypes.func,
+  onQuoteClick: PropTypes.func,
+  quoteBusy: PropTypes.bool,
+  quoteStatus: PropTypes.string
 };
 
 TrackingTab.defaultProps = {
   trackingError: null,
   trackingResult: null,
   onNavigateToRate: null,
-  updateRateData: null
+  updateRateData: null,
+  updateAddress: null,
+  setNotification: null,
+  onQuoteClick: () => {},
+  quoteBusy: false,
+  quoteStatus: ''
 };
 
 export default TrackingTab;

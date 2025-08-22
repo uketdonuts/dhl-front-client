@@ -1,6 +1,6 @@
 from django.contrib import admin
 from .models import Shipment, TrackingEvent, RateQuote, EPODDocument, UserActivity, Contact, ServiceZone
-from .models import ServiceAreaCityMap
+from .models import ServiceAreaCityMap, CountryISO
 
 
 @admin.register(Shipment)
@@ -222,6 +222,13 @@ class ServiceAreaCityMapAdmin(admin.ModelAdmin):
     search_fields = ('country_code', 'state_code', 'service_area', 'city_name', 'display_name')
     ordering = ('country_code', 'state_code', 'service_area', 'city_name')
     readonly_fields = ('created_at', 'updated_at')
+
+
+@admin.register(CountryISO)
+class CountryISOAdmin(admin.ModelAdmin):
+    list_display = ('code', 'display_name', 'currency_code', 'numeric_code')
+    search_fields = ('code', 'iso_short_name', 'iso_full_name', 'dhl_short_name')
+    list_filter = ('currency_code',)
 
 
 # Configuración del sitio admin

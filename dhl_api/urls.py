@@ -47,9 +47,11 @@ urlpatterns = [
     path('service-zones/states/<str:country_code>/', views.get_states_by_country, name='get_states_by_country'),
     path('service-zones/cities/<str:country_code>/', views.get_cities_by_country_state, name='get_cities_by_country'),
     path('service-zones/cities/<str:country_code>/<str:state_code>/', views.get_cities_by_country_state, name='get_cities_by_country_state'),
+    path('service-zones/map-stats/<str:country_code>/', views.map_stats_by_country, name='map_stats_by_country'),
     path('service-zones/areas/<str:country_code>/', views.get_service_areas_by_location, name='get_service_areas'),
     path('service-zones/postal-codes/<str:country_code>/', views.get_postal_codes_by_location, name='get_postal_codes'),
     path('service-zones/resolve-display/', views.resolve_service_area_display, name='resolve_service_area_display'),
     path('service-zones/search/', views.search_service_zones, name='search_service_zones'),
     path('service-zones/analyze-country/<str:country_code>/', views.analyze_country_structure, name='analyze_country_structure'),
+    path('service-zones/map-stats/<str:country_code>/', views.map_stats_by_country, name='map_stats_by_country'),
 ]

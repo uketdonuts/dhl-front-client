@@ -40,6 +40,8 @@ import requests
 import json
 from django.core.paginator import Paginator
 from django.db.models import Q
+from django.conf import settings
+from decimal import Decimal, ROUND_HALF_UP
 
 logger = logging.getLogger(__name__)
 
@@ -369,11 +371,111 @@ def rate_view(request):
             logger.info(f"Account number: {account_number}")
             logger.info(f"Service: {service}")
             
+            # Calcular PESO EFECTIVO para cotizar: mayor entre
+            # - weight (input base)
+            # - total_weight (si viene)
+            # - suma de piezas (si vienen)
+            # - suma dimensional de piezas (si vienen L/W/H) con regla sum-then-round (HALF_UP)
+            # - mayor peso individual de las piezas (si vienen)
+            base_weight = float(serializer.validated_data['weight'])
+            total_weight_in = None
+            pieces = serializer.validated_data.get('pieces') or []
+            sum_pieces = 0.0
+            max_piece = 0.0
+            # Dimensional: calcularemos ambos modos
+            # - sum-then-round (referencia)
+            # - round-then-sum (SOAP-style) → este será el candidato principal
+            sum_dimensional_sum_then_round = 0.0
+            sum_dimensional_round_then_sum = 0.0
+            max_piece_dimensional = 0.0
+            try:
+                total_weight_in = float(serializer.validated_data.get('total_weight')) if serializer.validated_data.get('total_weight') else None
+            except Exception:
+                total_weight_in = None
+            try:
+                weights_list = []
+                dim_sum_exact = Decimal('0')
+                dim_sum_exact = Decimal('0')
+                dim_sum_rounded = Decimal('0')
+                for p in pieces:
+                    try:
+                        w = float(p.get('weight') or 0)
+                    except Exception:
+                        w = 0.0
+                    weights_list.append(w)
+                    # Dimensional por pieza si hay L/W/H
+                    try:
+                        L = p.get('length') or p.get('L') or p.get(' largo')
+                        W = p.get('width') or p.get('W') or p.get('ancho')
+                        H = p.get('height') or p.get('H') or p.get('alto')
+                        if L and W and H:
+                            dL = Decimal(str(float(L)))
+                            dW = Decimal(str(float(W)))
+                            dH = Decimal(str(float(H)))
+                            dim_exact = (dL * dW * dH) / Decimal('5000')
+                            # acumular exacto y trackear máximo por pieza (luego redondeamos)
+                            dim_sum_exact += dim_exact
+                            piece_dim_rounded_dec = dim_exact.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                            dim_sum_rounded += piece_dim_rounded_dec
+                            piece_dim_rounded = float(piece_dim_rounded_dec)
+                            if piece_dim_rounded > max_piece_dimensional:
+                                max_piece_dimensional = piece_dim_rounded
+                    except Exception:
+                        pass
+                if weights_list:
+                    sum_pieces = sum(weights_list)
+                    max_piece = max(weights_list)
+                # Redondear suma dimensional AL FINAL (sum-then-round)
+                try:
+                    if dim_sum_exact > 0:
+                        sum_dimensional_sum_then_round = float(dim_sum_exact.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))
+                except Exception:
+                    sum_dimensional_sum_then_round = 0.0
+                # Sumar por pieza redondeada (round-then-sum)
+                try:
+                    if dim_sum_rounded > 0:
+                        sum_dimensional_round_then_sum = float(dim_sum_rounded.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))
+                except Exception:
+                    sum_dimensional_round_then_sum = float(dim_sum_rounded) if dim_sum_rounded else 0.0
+            except Exception:
+                sum_pieces = 0.0
+                max_piece = 0.0
+                sum_dimensional_sum_then_round = 0.0
+                sum_dimensional_round_then_sum = 0.0
+                max_piece_dimensional = 0.0
+
+            candidates = [base_weight]
+            if total_weight_in and total_weight_in > 0:
+                candidates.append(total_weight_in)
+            if sum_pieces > 0:
+                candidates.append(sum_pieces)
+            # Usar el dimensional SOAP-style como candidato principal
+            if sum_dimensional_round_then_sum > 0:
+                candidates.append(sum_dimensional_round_then_sum)
+            if max_piece > 0:
+                candidates.append(max_piece)
+
+            effective_weight = max(candidates) if candidates else base_weight
+
+            # Redondeo consistente a 2 decimales usando HALF_UP del servicio
+            try:
+                effective_weight = dhl_service._round_half_up(effective_weight, 2)
+                sum_pieces = dhl_service._round_half_up(sum_pieces, 2)
+                max_piece = dhl_service._round_half_up(max_piece, 2)
+                sum_dimensional_sum_then_round = dhl_service._round_half_up(sum_dimensional_sum_then_round, 2)
+                sum_dimensional_round_then_sum = dhl_service._round_half_up(sum_dimensional_round_then_sum, 2)
+                max_piece_dimensional = dhl_service._round_half_up(max_piece_dimensional, 2)
+                if total_weight_in is not None:
+                    total_weight_in = dhl_service._round_half_up(total_weight_in, 2)
+                base_weight = dhl_service._round_half_up(base_weight, 2)
+            except Exception:
+                effective_weight = round(float(effective_weight), 2)
+
             # Llamar API DHL
             result = dhl_service.get_rate(
                 origin=_origin,
                 destination=_destination,
-                weight=serializer.validated_data['weight'],
+                weight=effective_weight,
                 dimensions=serializer.validated_data['dimensions'],
                 declared_weight=serializer.validated_data.get('declared_weight'),
                 content_type=service,
@@ -383,6 +485,19 @@ def rate_view(request):
             # Agregar metadatos adicionales
             result['request_timestamp'] = datetime.now().isoformat()
             result['requested_by'] = request.user.username
+            # Adjuntar desglose de cómo se eligió el peso efectivo
+            result.setdefault('weight_selection', {})
+            result['weight_selection'].update({
+                'base_weight': base_weight,
+                'total_weight_input': total_weight_in,
+                'sum_pieces': sum_pieces,
+                'sum_dimensional_sum_then_round': sum_dimensional_sum_then_round,
+                'sum_dimensional_round_then_sum': sum_dimensional_round_then_sum,
+                'max_piece': max_piece,
+                'max_piece_dimensional': max_piece_dimensional,
+                'effective_weight_used': effective_weight,
+                'rule': 'max(base, total_weight, sum_pieces, sum_dimensional(round-then-sum), max_piece)'
+            })
             
             # Guardar cotización en la base de datos si es exitosa
             if result.get('success') and result.get('rates'):
@@ -446,6 +561,7 @@ def rate_view(request):
                             'total_rates': result.get('total_rates', len(result.get('rates', []))),
                             'message': result.get('message', ''),
                             'weight_breakdown': result.get('weight_breakdown', {}),
+                            'weight_selection': result.get('weight_selection', {}),
                             # Evitar almacenar todo raw_data pesado si no es necesario
                         }
                     }
@@ -1079,18 +1195,320 @@ def tracking_view(request):
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         
         
+        # Permitir incluir la respuesta cruda de DHL si el cliente lo solicita
+        include_raw = False
+        try:
+            include_raw = bool(request.data.get('include_raw', False))
+        except Exception:
+            include_raw = False
+
+        # Construir respuesta rica con los campos clave del tracking DHL
+        shipment_info = tracking_info.get('shipment_info', {})
         response_data = {
             'success': tracking_info.get('success', False),
-            'tracking_info': tracking_info.get('shipment_info', {}),  # Usar shipment_info que es donde está la data
+            'status': tracking_info.get('status', shipment_info.get('status_description')),  # Estado legible
+            'tracking_number': tracking_info.get('tracking_number', tracking_number),
+            'dhl_tracking_url': f"https://www.dhl.com/global-en/home/tracking/tracking-express.html?submit=1&tracking-id={tracking_number}",
+
+            # Información principal del envío
+            'tracking_info': shipment_info,
+
+            # Eventos y piezas (listas)
             'events': tracking_info.get('events', []),
             'piece_details': tracking_info.get('piece_details', []),
+
+            # Contadores (compatibilidad y claridad)
             'total_events': tracking_info.get('total_events', 0),
             'total_pieces': tracking_info.get('total_pieces', 0),
+            'events_count': tracking_info.get('total_events', 0),
+            'pieces_count': tracking_info.get('total_pieces', 0),
+
+            # Info adicional resumida
+            'additional_info': tracking_info.get('additional_info', {}),
             'message': tracking_info.get('message', ''),
             'request_timestamp': datetime.now(),
-            'tracking_number': tracking_number,
             'requested_by': request.user.username if request.user.is_authenticated else 'anonymous'
         }
+
+        # Aliases numéricos para compatibilidad con visores de logs simples
+        response_data['pieces'] = response_data.get('total_pieces', 0)
+        response_data['events_total'] = response_data.get('total_events', 0)
+
+        # Resumen compacto útil para auditoría/log
+        response_data['summary'] = {
+            'status': response_data.get('status'),
+            'status_code': shipment_info.get('status'),
+            'events': response_data.get('total_events', 0),
+            'pieces': response_data.get('total_pieces', 0),
+            'total_weight': shipment_info.get('total_weight'),
+            'weight_unit': shipment_info.get('weight_unit'),
+            'origin': shipment_info.get('origin'),
+            'destination': shipment_info.get('destination'),
+            'service_type': shipment_info.get('service_type', shipment_info.get('service')),
+        }
+
+        # Resumen de pesos clave para cotización: total envío, suma de piezas y pieza más pesada
+        try:
+            def _to_decimal(v):
+                """Convierte a Decimal seguro; ignora vacíos, NaN e infinitos."""
+                if v is None:
+                    return None
+                # tratar strings vacíos o 'NaN'
+                if isinstance(v, str) and not v.strip():
+                    return None
+                try:
+                    d = Decimal(str(v))
+                except Exception:
+                    return None
+                # Ignorar no finitos (NaN, Inf)
+                try:
+                    if not d.is_finite():
+                        return None
+                except Exception:
+                    return None
+                return d
+
+            def _round_2(v):
+                return v.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+
+            unit = shipment_info.get('weight_unit') or 'KG'
+            shipment_total = _to_decimal(shipment_info.get('total_weight'))
+
+            pieces = tracking_info.get('piece_details', []) or []
+            piece_weights = []
+            for p in pieces:
+                w = None
+                # Prioridad ampliada: selected > actual(reweigh) > actual > declared > peso_declarado > weight
+                wi = p.get('weight_info') or {}
+
+                # Helper para extraer valor desde dict o número
+                def _val(x):
+                    if isinstance(x, dict):
+                        return _to_decimal(x.get('value') if 'value' in x else x.get('amount'))
+                    return _to_decimal(x)
+
+                preferred_keys_weightinfo = (
+                    'selected_weight',
+                    'actual_weight_reweigh',
+                    'actual_weight',
+                    'declared_weight',
+                    'peso_declarado',
+                    'repesaje',
+                    'weight',
+                )
+                preferred_keys_piece = preferred_keys_weightinfo
+
+                for key in preferred_keys_weightinfo:
+                    if key in wi and w is None:
+                        w = _val(wi.get(key))
+                if w is None:
+                    for key in preferred_keys_piece:
+                        if key in p and w is None:
+                            w = _val(p.get(key))
+                if w is not None:
+                    piece_weights.append(w)
+
+            sum_pieces = _round_2(sum(piece_weights, Decimal('0'))) if piece_weights else Decimal('0.00')
+            max_piece = _round_2(max(piece_weights)) if piece_weights else Decimal('0.00')
+            if shipment_total is not None:
+                shipment_total = _round_2(shipment_total)
+
+            candidates = [c for c in (shipment_total, sum_pieces, max_piece) if c is not None]
+            highest = _round_2(max(candidates)) if candidates else None
+
+            response_data['weights_summary'] = {
+                'shipment_total': float(shipment_total) if shipment_total is not None else None,
+                'sum_pieces': float(sum_pieces),
+                'max_piece': float(max_piece),
+                'unit': unit,
+                'highest_for_quote': float(highest) if highest is not None else None
+            }
+
+            # Tres sumas estilo SOAP: declarado, repesaje (actual) y volumétrico (round-then-sum)
+            sum_declared = Decimal('0')
+            sum_actual = Decimal('0')
+            sum_dimensional = Decimal('0')
+
+            for p in pieces:
+                wi = p.get('weight_info') or {}
+                # Declarado: declared_weight | peso_declarado
+                dec = (
+                    wi.get('declared_weight',
+                           p.get('declared_weight', p.get('peso_declarado')))
+                )
+                # Repesaje/Actual: actual_weight_reweigh | actual_weight | repesaje
+                act = (
+                    wi.get('actual_weight_reweigh',
+                           wi.get('actual_weight',
+                                  p.get('actual_weight', p.get('repesaje'))))
+                )
+
+                # Dimensional provisto por DHL si existe
+                dim = None
+                if 'dhl_dimensional_weight' in wi:
+                    dim = wi.get('dhl_dimensional_weight')
+                elif 'dhl_dimensional_weight' in p:
+                    dim = p.get('dhl_dimensional_weight')
+
+                d_dec = _to_decimal(dec)
+                d_act = _to_decimal(act)
+                d_dim = _to_decimal(dim)
+
+                if d_dec is not None:
+                    sum_declared += _round_2(d_dec)
+                if d_act is not None:
+                    sum_actual += _round_2(d_act)
+                if d_dim is not None:
+                    sum_dimensional += _round_2(d_dim)
+
+            # Redondeo final a 2 decimales
+            sum_declared = _round_2(sum_declared)
+            sum_actual = _round_2(sum_actual)
+            sum_dimensional = _round_2(sum_dimensional)
+
+            soap_candidates = [c for c in (sum_declared, sum_actual, sum_dimensional) if c is not None]
+            soap_highest = _round_2(max(soap_candidates)) if soap_candidates else None
+
+            response_data['weights_three_sums'] = {
+                'sum_declared': float(sum_declared),
+                'sum_actual': float(sum_actual),
+                'sum_dimensional': float(sum_dimensional),
+                'unit': unit,
+                'highest_for_quote': float(soap_highest) if soap_highest is not None else None
+            }
+
+            # Pesos por pieza: declarado, actual (repesaje), volumétrico
+            weights_by_piece = []
+            for idx, p in enumerate(pieces):
+                wi = p.get('weight_info') or {}
+                # Declarado con fallback a español
+                dec = _to_decimal(
+                    wi.get('declared_weight', p.get('declared_weight', p.get('peso_declarado')))
+                )
+                # Actual/repesaje con alias
+                act = _to_decimal(
+                    wi.get('actual_weight_reweigh', wi.get('actual_weight', p.get('actual_weight', p.get('repesaje'))))
+                )
+                dim = None
+                if 'dhl_dimensional_weight' in wi:
+                    dim = _to_decimal(wi.get('dhl_dimensional_weight'))
+                elif 'dhl_dimensional_weight' in p:
+                    dim = _to_decimal(p.get('dhl_dimensional_weight'))
+
+                item = {
+                    'index': idx,
+                    'piece_id': p.get('piece_id') or p.get('pieceNumber') or p.get('id') or None,
+                    'declared': float(_round_2(dec)) if dec is not None else None,
+                    'actual': float(_round_2(act)) if act is not None else None,
+                    'dimensional': float(_round_2(dim)) if dim is not None else None,
+                    'unit': unit,
+                }
+                weights_by_piece.append(item)
+
+            response_data['weights_by_piece'] = weights_by_piece
+        except Exception as _we:
+            # Siempre incluir las claves aunque falle el cálculo para facilitar el frontend/debug
+            logger.warning(f"weights computation failed, returning defaults: {_we}")
+            unit = (tracking_info.get('shipment_info') or {}).get('weight_unit') or 'KG'
+            response_data['weights_summary'] = {
+                'shipment_total': None,
+                'sum_pieces': 0.0,
+                'max_piece': 0.0,
+                'unit': unit,
+                'highest_for_quote': None,
+            }
+            response_data['weights_three_sums'] = {
+                'sum_declared': 0.0,
+                'sum_actual': 0.0,
+                'sum_dimensional': 0.0,
+                'unit': unit,
+                'highest_for_quote': None,
+            }
+            response_data['weights_by_piece'] = []
+
+        # Incluir payload crudo de DHL según bandera
+        if include_raw:
+            # raw_data del parser + metadatos HTTP si están disponibles
+            if 'raw_data' in tracking_info:
+                response_data['raw_data'] = tracking_info['raw_data']
+            if 'http_status' in tracking_info:
+                response_data['http_status'] = tracking_info['http_status']
+            if 'response_headers' in tracking_info:
+                response_data['response_headers'] = tracking_info['response_headers']
+
+        # Reglas de negocio: si DHL no devuelve peso volumétrico, requerir cuenta para cotizar con este peso
+        try:
+            pieces_for_flags = tracking_info.get('piece_details', []) or []
+            shipment_info_for_flags = tracking_info.get('shipment_info', {}) or {}
+            # ¿Hay peso volumétrico oficial de DHL?
+            dhl_total_dim = shipment_info_for_flags.get('dhl_total_dimensional_weight')
+            has_dhl_total_dim = bool(dhl_total_dim) and float(dhl_total_dim) > 0
+            has_piece_dhl_dim = any(
+                float(p.get('dhl_dimensional_weight') or (p.get('weight_info') or {}).get('dhl_dimensional_weight') or 0) > 0
+                for p in pieces_for_flags
+            )
+            volumetric_from_dhl = bool(has_dhl_total_dim or has_piece_dhl_dim)
+
+            # ¿Hay pesos declarado y repesaje presentes en al menos una pieza?
+            declared_present = any(
+                (p.get('peso_declarado') is not None) or ((p.get('weight_info') or {}).get('declared_weight') is not None)
+                for p in pieces_for_flags
+            )
+            actual_present = any(
+                (p.get('repesaje') is not None) or ((p.get('weight_info') or {}).get('actual_weight_reweigh') is not None) or ((p.get('weight_info') or {}).get('actual_weight') is not None)
+                for p in pieces_for_flags
+            )
+
+            # Regla dada por negocio: si NO hay volumétrico oficial, debemos pedir crear/usar cuenta antes de cotizar con ese peso
+            needs_account_for_quote = not volumetric_from_dhl
+
+            # Peso sugerido para cotización (ya calculado arriba)
+            suggested = None
+            try:
+                w_summary = response_data.get('weights_summary') or {}
+                w_three = response_data.get('weights_three_sums') or {}
+                cands = [
+                    w_summary.get('highest_for_quote'),
+                    w_three.get('highest_for_quote'),
+                ]
+                cands = [float(x) for x in cands if x is not None]
+                suggested = max(cands) if cands else None
+            except Exception:
+                suggested = None
+
+            response_data['account_requirements'] = {
+                'volumetric_from_dhl': volumetric_from_dhl,
+                'declared_present': declared_present,
+                'actual_present': actual_present,
+                'needs_account_for_quote': needs_account_for_quote,
+                'reason': None if volumetric_from_dhl else 'missing_dhl_volumetric_weight',
+                'cta': {
+                    'action': 'create_account',
+                    'endpoint': '/api/accounts/create/'
+                }
+            }
+            response_data['quote_with_weight'] = {
+                'allowed': not needs_account_for_quote,
+                'blocked_reason': None if not needs_account_for_quote else 'missing_dhl_volumetric_weight',
+                'suggested_weight': suggested,
+                'unit': (response_data.get('weights_summary') or {}).get('unit') or 'kg'
+            }
+        except Exception as _af:
+            logger.debug(f"account gating flags skipped: {_af}")
+
+        # Modo "raw_only": devolver únicamente la respuesta cruda de DHL (útil para debugging)
+        try:
+            raw_only = bool(request.data.get('raw_only', False))
+        except Exception:
+            raw_only = False
+        if raw_only:
+            raw_block = {
+                'success': tracking_info.get('success', False),
+                'http_status': tracking_info.get('http_status'),
+                'response_headers': tracking_info.get('response_headers'),
+                'raw_data': tracking_info.get('raw_data')
+            }
+            return Response(raw_block)
         
         if not tracking_info.get('success'):
             logger.warning(f"Tracking failed for {tracking_number}: {tracking_info.get('message')}")
@@ -1126,9 +1544,30 @@ def tracking_view(request):
             return Response(response_data, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         
         logger.info(f"Tracking successful for {tracking_number}")
-        # Registrar actividad con payloads (success)
+        # Registrar actividad con payloads (success) enriquecidos para visibilidad en UI/logs
         try:
             if request.user.is_authenticated:
+                # Resumen compacto
+                _si = shipment_info
+                _events = tracking_info.get('events', [])
+                _last_event = _events[-1] if _events else {}
+                _summary = {
+                    'status': response_data.get('status'),
+                    'total_weight': _si.get('total_weight'),
+                    'weight_unit': _si.get('weight_unit'),
+                    'origin': _si.get('origin'),
+                    'destination': _si.get('destination'),
+                    'service_type': _si.get('service_type', _si.get('service')),
+                    'last_event': {
+                        'description': _last_event.get('description'),
+                        'date': _last_event.get('date'),
+                        'time': _last_event.get('time'),
+                        'location': _last_event.get('location'),
+                        'type_code': _last_event.get('type_code')
+                    } if _last_event else None,
+                    'tracking_url': response_data.get('dhl_tracking_url')
+                }
+
                 UserActivity.log_activity(
                     user=request.user,
                     action='track_shipment',
@@ -1144,7 +1583,15 @@ def tracking_view(request):
                             'success': True,
                             'message': tracking_info.get('message'),
                             'events': tracking_info.get('total_events', 0),
-                            'pieces': tracking_info.get('total_pieces', 0)
+                            'pieces': tracking_info.get('total_pieces', 0),
+                            'status': _summary['status'],
+                            'total_weight': _summary['total_weight'],
+                            'weight_unit': _summary['weight_unit'],
+                            'origin': _summary['origin'],
+                            'destination': _summary['destination'],
+                            'service_type': _summary['service_type'],
+                            'last_event': _summary['last_event'],
+                            'tracking_url': _summary['tracking_url']
                         }
                     }
                 )
@@ -2984,17 +3431,58 @@ def get_countries(request):
         - Lista de países con código y nombre
     """
     try:
-        from .models import ServiceZone
+        from .models import ServiceZone, ServiceAreaCityMap, CountryISO
+        from .utils.country_utils import get_country_name_from_iso
         from .serializers import CountrySerializer
-        
-        countries = ServiceZone.get_countries()
-        serializer = CountrySerializer(countries, many=True)
-        
+
+        # Fuente primaria: ServiceAreaCityMap (países con mapeo disponible)
+        map_country_codes = list(
+            ServiceAreaCityMap.objects
+            .values_list('country_code', flat=True)
+            .distinct()
+            .order_by('country_code')
+        )
+
+        countries_list = []
+        if map_country_codes:
+            # Resolver country_name desde ServiceZone como referencia
+            for cc in map_country_codes:
+                # Priorizar CountryISO DB; luego ServiceZone; luego util local
+                name = CountryISO.resolve_name(
+                    cc,
+                    fallback=(
+                        ServiceZone.objects
+                        .filter(country_code=cc)
+                        .exclude(country_name__isnull=True)
+                        .exclude(country_name='')
+                        .values_list('country_name', flat=True)
+                        .first() or ''
+                    ) or get_country_name_from_iso(cc)
+                )
+                countries_list.append({'country_code': cc, 'country_name': name})
+        else:
+            # Fallback: usar ServiceZone
+            countries_list = ServiceZone.get_countries()
+            # Normalizar nombres si vinieran vacíos
+            if countries_list:
+                norm = []
+                for c in countries_list:
+                    code = (c.get('country_code') or '').upper()
+                    # Resolver desde CountryISO con fallback a util
+                    name = CountryISO.resolve_name(code, fallback=c.get('country_name') or '')
+                    if not name:
+                        name = get_country_name_from_iso(code)
+                    norm.append({'country_code': code, 'country_name': name})
+                countries_list = norm
+
+        serializer = CountrySerializer(countries_list, many=True)
+
         return Response({
             'success': True,
             'message': 'Países obtenidos exitosamente',
             'data': serializer.data,
-            'count': len(serializer.data)
+            'count': len(serializer.data),
+            'source': 'ServiceAreaCityMap' if map_country_codes else 'ServiceZone'
         }, status=status.HTTP_200_OK)
         
     except Exception as e:
@@ -3020,10 +3508,24 @@ def get_states_by_country(request, country_code):
         - Lista de estados/provincias del país especificado
     """
     try:
-        from .models import ServiceZone
+        from .models import ServiceAreaCityMap
         from .serializers import StateSerializer
-        
-        states = ServiceZone.get_states_by_country(country_code.upper())
+
+        cc = country_code.upper()
+
+        # Usar únicamente ServiceAreaCityMap como fuente de verdad
+        map_state_codes = list(
+            ServiceAreaCityMap.objects
+            .filter(country_code=cc)
+            .exclude(state_code__isnull=True)
+            .exclude(state_code='')
+            .values_list('state_code', flat=True)
+            .distinct()
+            .order_by('state_code')
+        )
+
+        states = [{'state_code': sc, 'state_name': sc} for sc in map_state_codes]
+
         serializer = StateSerializer(states, many=True)
         
         return Response({
@@ -3031,7 +3533,8 @@ def get_states_by_country(request, country_code):
             'message': f'Estados de {country_code} obtenidos exitosamente',
             'data': serializer.data,
             'count': len(serializer.data),
-            'country_code': country_code.upper()
+            'country_code': country_code.upper(),
+            'source': 'ServiceAreaCityMap'
         }, status=status.HTTP_200_OK)
         
     except Exception as e:
@@ -3045,7 +3548,7 @@ def get_states_by_country(request, country_code):
 
 @api_view(['GET'])
 @permission_classes([AllowAny])
-@cache_page(60 * 15)  # Cache por 15 minutos
+@cache_page(60 * 5, key_prefix='cities_v2')  # Cache por 5 minutos (v2 para invalidar caché vieja)
 def get_cities_by_country_state(request, country_code, state_code=None):
     """
     Obtiene lista de ciudades por país y opcionalmente por estado.
@@ -3059,17 +3562,79 @@ def get_cities_by_country_state(request, country_code, state_code=None):
         - Lista de ciudades/áreas de servicio del país/estado especificado
     """
     try:
-        from .models import ServiceZone
-        
-        cities = ServiceZone.get_cities_smart(
-            country_code.upper(), 
-            state_code.upper() if state_code else None
+        from .models import ServiceAreaCityMap, ServiceZone
+
+        prefer = (request.GET.get('prefer') or '').strip().lower()
+        allowed = {'', 'city_name', 'service_area', 'map'}
+        if prefer not in allowed:
+            prefer = ''
+
+        cc = country_code.upper()
+        sc = state_code.upper() if state_code else None
+
+        # Fuente única: ServiceAreaCityMap
+        qs_map = ServiceAreaCityMap.objects.filter(country_code=cc)
+        # Para CA, no filtramos por estado para asegurar lista completa
+        if sc and cc != 'CA':
+            qs_map = qs_map.filter(state_code=sc)
+
+        # Optimizar: devolver ciudades únicas por city_name para evitar explosión por cada rango postal
+        q = (request.GET.get('q') or '').strip()
+        if q:
+            qs_map = qs_map.filter(city_name__icontains=q)
+
+        city_list = (
+            qs_map
+            .exclude(city_name='')
+            .values_list('city_name', flat=True)
+            .distinct()
+            .order_by('city_name')
         )
-        
+        cities = [
+            {'name': c, 'code': c, 'display_name': c, 'type': 'map_city'}
+            for c in city_list
+        ]
+
+        # Fallback/append: incluir ciudades desde ServiceZone (ESD) que no estén en el mapa
+        try:
+            esd_items = ServiceZone.get_cities_smart(cc, sc)
+            # Aplicar filtro de búsqueda si corresponde
+            if q:
+                q_low = q.lower()
+                esd_items = [it for it in esd_items if (it.get('display_name') or '').lower().find(q_low) >= 0]
+
+            existing = set((ci.get('display_name') or '').strip().lower() for ci in cities)
+            appended = 0
+            for it in esd_items:
+                disp = (it.get('display_name') or '').strip()
+                if not disp:
+                    continue
+                key = disp.lower()
+                if key in existing:
+                    continue
+                # Normalizar estructura al mismo formato
+                cities.append({
+                    'name': it.get('code') or disp,
+                    'code': it.get('code') or disp,
+                    'display_name': disp,
+                    'type': f"esd_{it.get('type') or 'city'}"
+                })
+                existing.add(key)
+                appended += 1
+        except Exception as _e:
+            # No bloquear si ESD falla
+            appended = 0
+
         location = f'{country_code}'
         if state_code:
             location += f'/{state_code}'
-        
+
+        # Debug: log request parameters and result count
+        try:
+            logger.info(f"CITIES API -> cc={cc}, sc={sc}, q='{q}', count={len(cities)}")
+        except Exception:
+            pass
+
         return Response({
             'success': True,
             'message': f'Ciudades de {location} obtenidas exitosamente',
@@ -3077,9 +3642,18 @@ def get_cities_by_country_state(request, country_code, state_code=None):
             'count': len(cities),
             'country_code': country_code.upper(),
             'state_code': state_code.upper() if state_code else None,
-            'data_type': cities[0]['type'] if cities else 'none'
+            'data_type': cities[0]['type'] if cities else 'none',
+            'preferences': {
+                'prefer': 'map_city_name',
+                'optimized': True
+            },
+            'merge': {
+                'source': 'map+esd',
+                'appended_from_esd': appended if 'appended' in locals() else 0
+            },
+            'cache_version': 'cities_v2'
         }, status=status.HTTP_200_OK)
-        
+
     except Exception as e:
         logger.error(f"Error obteniendo ciudades para {country_code}/{state_code}: {str(e)}")
         return Response({
@@ -3107,39 +3681,40 @@ def get_service_areas_by_location(request, country_code):
         - Lista de áreas de servicio disponibles
     """
     try:
-        from .models import ServiceZone, ServiceAreaCityMap
+        from .models import ServiceAreaCityMap
         from .serializers import ServiceAreaSerializer
-        
+        from django.db.models import Q
+
         state_code = request.GET.get('state_code')
         city_name = request.GET.get('city_name')
-        
-        raw_service_areas = ServiceZone.get_service_areas_by_location(
-            country_code.upper(),
-            state_code.upper() if state_code else None,
-            city_name
+
+        cc = country_code.upper()
+        sc = state_code.upper() if state_code else None
+
+        qs = ServiceAreaCityMap.objects.filter(country_code=cc)
+        if sc and cc != 'CA':
+            qs = qs.filter(state_code=sc)
+        if city_name:
+            qs = qs.filter(Q(city_name__iexact=city_name) | Q(display_name__icontains=city_name))
+
+        codes = (
+            qs.exclude(service_area__isnull=True)
+              .exclude(service_area='')
+              .values('service_area', 'display_name')
+              .distinct()
         )
-        # Resolver nombres amigables desde ServiceAreaCityMap
-        codes = [sa['service_area'] for sa in raw_service_areas]
-        display_by_code = {}
-        if codes:
-            mappings = (ServiceAreaCityMap.objects
-                        .filter(country_code=country_code.upper(), service_area__in=codes)
-                        .values('service_area', 'display_name')
-                        .distinct())
-            # Priorizar nombres únicos por código; si hay múltiples, tomamos el primero
-            for m in mappings:
-                display_by_code.setdefault(m['service_area'], m['display_name'])
 
         enriched = []
-        for sa in raw_service_areas:
-            code = sa.get('service_area')
-            dn = display_by_code.get(code, code)
-            enriched.append({
-                'service_area': code,
-                'display_name': dn,
-            })
+        seen = set()
+        for row in codes:
+            code = row.get('service_area')
+            disp = row.get('display_name') or code
+            if not code or code in seen:
+                continue
+            seen.add(code)
+            enriched.append({'service_area': code, 'display_name': disp})
 
-        # Asegurar unicidad de display_name: si se repite, concatenar código
+        # Asegurar unicidad de display_name
         counts = {}
         for item in enriched:
             counts[item['display_name']] = counts.get(item['display_name'], 0) + 1
@@ -3174,168 +3749,100 @@ def get_service_areas_by_location(request, country_code):
 @permission_classes([AllowAny])
 @cache_page(60 * 15)  # Cache por 15 minutos
 def get_postal_codes_by_location(request, country_code):
-    """
-    Obtiene códigos postales por ubicación con paginación y límites inteligentes.
-    
-    Args:
-        country_code: Código de país ISO (2 letras)
-    
-    Query parameters:
-        - state_code: Código de estado/provincia (opcional)
-        - city_name: Nombre de ciudad (opcional)
-        - service_area: Código de área de servicio (opcional, ej: YYZ, YVR)
-        - page: Número de página (opcional, por defecto 1)
-        - page_size: Tamaño de página (opcional, por defecto 100, máximo 1000)
-        - limit: Límite total de resultados (opcional, por defecto 5000)
-        - force_all: Forzar obtener todos los resultados (opcional, solo para admin)
-    
-    Returns:
-        - Lista paginada de rangos de códigos postales disponibles
-    """
     try:
-        from .models import ServiceZone
+        from .models import ServiceAreaCityMap, ServiceZone
         from .serializers import PostalCodeSerializer
-        
+        from django.db.models import Q
+
         state_code = request.GET.get('state_code')
         city_name = request.GET.get('city_name')
         service_area = request.GET.get('service_area')
         page = int(request.GET.get('page', 1))
-        page_size = min(int(request.GET.get('page_size', 100)), 1000)  # Máximo 1000
-        limit = int(request.GET.get('limit', 5000))  # Límite por defecto 5000
-        force_all = request.GET.get('force_all', '').lower() == 'true'
-        
-        # Países con muchos códigos postales (requieren filtros específicos)
-        LARGE_COUNTRIES = ['CA', 'US', 'GB', 'DE', 'FR', 'AU', 'IN']
-        
-        # Obtener queryset base
-        postal_codes_qs = ServiceZone.get_postal_codes_by_location(
-            country_code.upper(),
-            state_code.upper() if state_code else None,
-            city_name,
-            service_area.upper() if service_area else None
-        )
-        
-        total_count = postal_codes_qs.count()
-        
-        # Para países grandes sin filtros específicos, requerir al menos state_code
-        if (country_code.upper() in LARGE_COUNTRIES and 
-            not state_code and 
-            not city_name and 
-            not service_area and
-            not force_all and
-            total_count > 10000):
-            
-            # Obtener estados disponibles
-            available_states = list(ServiceZone.objects.filter(
-                country_code=country_code.upper(),
-                state_code__isnull=False
-            ).exclude(
-                state_code=''
-            ).values_list('state_code', flat=True).distinct().order_by('state_code'))
-            
-            # Si no hay estados, obtener algunas ciudades como alternativa
-            available_cities = []
-            if not available_states:
-                available_cities = list(ServiceZone.objects.filter(
-                    country_code=country_code.upper(),
-                    city_name__isnull=False
-                ).exclude(
-                    city_name=''
-                ).values_list('city_name', flat=True).distinct().order_by('city_name')[:20])  # Limitar a 20 ciudades
-            
-            # Si tampoco hay ciudades, usar service_area como filtro alternativo
-            available_service_areas = []
-            if not available_states and not available_cities:
-                available_service_areas = list(ServiceZone.objects.filter(
-                    country_code=country_code.upper(),
-                    service_area__isnull=False
-                ).exclude(
-                    service_area=''
-                ).values_list('service_area', flat=True).distinct().order_by('service_area')[:15])
-            
-            # Crear mensaje más específico basado en qué filtros están disponibles
-            filter_message = f'Para {country_code.upper()}, se requiere especificar '
-            suggestion_message = 'Agregue '
-            
-            if available_states:
-                filter_message += 'provincia/estado o ciudad debido al gran volumen de datos'
-                suggestion_message += '?state_code=XX o ?city_name=Ciudad para filtrar los resultados'
-            elif available_cities:
-                filter_message += 'ciudad debido al gran volumen de datos'
-                suggestion_message += '?city_name=Ciudad para filtrar los resultados'
-            elif available_service_areas:
-                filter_message += 'área de servicio debido al gran volumen de datos'
-                suggestion_message += '?service_area=YYZ para filtrar los resultados'
-            else:
-                filter_message += 'filtros específicos debido al gran volumen de datos'
-                suggestion_message += 'filtros específicos para reducir los resultados'
-            
-            return Response({
-                'success': False,
-                'message': filter_message,
-                'error': 'FILTERS_REQUIRED',
-                'total_count': total_count,
-                'available_filters': {
-                    'states': available_states,
-                    'cities': available_cities,
-                    'service_areas': available_service_areas
-                },
-                'suggestion': suggestion_message,
-                'recommendations': {
-                    'use_city_filter': not available_states and len(available_cities) > 0,
-                    'use_service_area_filter': not available_states and not available_cities and len(available_service_areas) > 0,
-                    'message': (
-                        'Use filtro de ciudad ya que no hay provincias/estados disponibles' if not available_states and available_cities else
-                        'Use filtro de área de servicio ya que no hay provincias/estados o ciudades disponibles' if not available_states and not available_cities and available_service_areas else
-                        None
-                    )
-                }
-            }, status=status.HTTP_400_BAD_REQUEST)
-        
-        # Aplicar límite si no está forzado
-        if not force_all and total_count > limit:
-            postal_codes_qs = postal_codes_qs[:limit]
-            limited = True
-        else:
-            limited = False
-        
-        # Implementar paginación
-        start_index = (page - 1) * page_size
-        end_index = start_index + page_size
-        postal_codes_page = postal_codes_qs[start_index:end_index]
-        
-        serializer = PostalCodeSerializer(postal_codes_page, many=True)
-        
-        # Calcular información de paginación
-        total_pages = (min(total_count, limit if not force_all else total_count) + page_size - 1) // page_size
-        
+        page_size = min(int(request.GET.get('page_size', 100)), 1000)
+        limit = int(request.GET.get('limit', 5000))
+
+        cc = country_code.upper()
+        sc = state_code.upper() if state_code else None
+        sa = service_area.upper() if service_area else None
+
+        qs = ServiceAreaCityMap.objects.filter(country_code=cc)
+        if sc and cc != 'CA':
+            qs = qs.filter(state_code=sc)
+        if city_name:
+            qs = qs.filter(Q(city_name__iexact=city_name) | Q(display_name__icontains=city_name))
+        if sa:
+            qs = qs.filter(service_area=sa)
+        qs = qs.exclude(postal_code_from='').exclude(postal_code_to='')
+
+        total = qs.count()
+        total_limited = min(total, limit)
+        total_pages = (total_limited + page_size - 1) // page_size
+        page = max(1, min(page, total_pages or 1))
+        start = (page - 1) * page_size
+        end = start + page_size
+
+        # Base: datos desde ServiceAreaCityMap
+        rows_all = list(qs.order_by('postal_code_from')[:limit])
+        data_all = [
+            {
+                'postal_code_from': r.postal_code_from,
+                'postal_code_to': r.postal_code_to,
+                'service_area': r.service_area,
+            }
+            for r in rows_all
+        ]
+
+        # Fallback/append: complementar con rangos desde ServiceZone (ESD)
+        try:
+            esd_qs = ServiceZone.get_postal_codes_by_location(cc, sc, city_name, sa)
+            # Convertir a lista de dicts similares
+            esd_list = list(esd_qs)
+        except Exception:
+            esd_list = []
+
+        # Unificar y deduplicar por (from,to,service_area)
+        seen = set()
+        unified = []
+        for item in data_all + esd_list:
+            f = (item.get('postal_code_from') or '').strip()
+            t = (item.get('postal_code_to') or '').strip()
+            s = (item.get('service_area') or '').strip().upper()
+            key = (f, t, s)
+            if not f or not t:
+                continue
+            if key in seen:
+                continue
+            seen.add(key)
+            unified.append({'postal_code_from': f, 'postal_code_to': t, 'service_area': s})
+
+        # Ordenar y paginar sobre la unión
+        unified.sort(key=lambda x: (x['postal_code_from'], x['postal_code_to'], x['service_area']))
+        total = len(unified)
+        total_limited = min(total, limit)
+        total_pages = (total_limited + page_size - 1) // page_size
+        page = max(1, min(page, total_pages or 1))
+        start = (page - 1) * page_size
+        end = start + page_size
+        data = unified[start:end]
+        serializer = PostalCodeSerializer(data, many=True)
+
         return Response({
             'success': True,
             'message': 'Códigos postales obtenidos exitosamente',
             'data': serializer.data,
-            'pagination': {
-                'count': len(serializer.data),
-                'total_count': total_count,
-                'page': page,
-                'page_size': page_size,
-                'total_pages': total_pages,
-                'has_next': page < total_pages,
-                'has_previous': page > 1,
-                'limited': limited,
-                'limit_applied': limit if limited else None
-            },
+            'count': total_limited,
+            'page': page,
+            'page_size': page_size,
+            'total_pages': total_pages,
             'filters': {
-                'country_code': country_code.upper(),
-                'state_code': state_code.upper() if state_code else None,
+                'country_code': cc,
+                'state_code': sc,
                 'city_name': city_name,
-                'service_area': service_area.upper() if service_area else None
+                'service_area': sa
             },
-            'performance': {
-                'is_large_dataset': country_code.upper() in LARGE_COUNTRIES,
-                'requires_filters': country_code.upper() in LARGE_COUNTRIES and not state_code and not city_name and not service_area
-            }
+            'source': 'Map+ESD'
         }, status=status.HTTP_200_OK)
-        
+
     except ValueError as e:
         logger.error(f"Error de parámetros obteniendo códigos postales: {str(e)}")
         return Response({
@@ -3440,7 +3947,7 @@ def search_service_zones(request):
 @api_view(['GET'])
 @permission_classes([AllowAny])
 @throttle_classes([ServiceZoneAnonThrottle])
-@cache_page(60 * 30)  # Cache por 30 minutos - análisis de países es estático
+@cache_page(60 * 30, key_prefix='analyze_v2')  # Cache por 30 minutos - v2 para invalidar caché previa
 def analyze_country_structure(request, country_code):
     """
     Analiza la estructura de datos disponible para un país específico
@@ -3448,12 +3955,8 @@ def analyze_country_structure(request, country_code):
     """
     try:
         country_code = country_code.upper()
-        
-        # Obtener QuerySet base para el país (sin slice)
-        base_zones = ServiceZone.objects.filter(
-            country_code=country_code
-        )
-        
+
+        base_zones = ServiceZone.objects.filter(country_code=country_code)
         if not base_zones.exists():
             return Response({
                 'success': False,
@@ -3464,40 +3967,31 @@ def analyze_country_structure(request, country_code):
                 'hasPostalCodes': False,
                 'pattern': 'NO_DATA'
             }, status=status.HTTP_404_NOT_FOUND)
-        
-        # Analizar campos disponibles usando el QuerySet base
+
         total_records = base_zones.count()
-        
-        # Contar registros con estados no vacíos
-        states_count = base_zones.exclude(
-            Q(state_code__isnull=True) | Q(state_code='')
-        ).count()
-        
-        # Contar registros con ciudades no vacías (city_name O service_area)
-        cities_count = base_zones.exclude(
-            Q(city_name__isnull=True) | Q(city_name='')
-        ).count()
-        
-        # Contar registros con service_area (códigos de ciudad/aeropuerto)
-        service_area_count = base_zones.exclude(
-            Q(service_area__isnull=True) | Q(service_area='')
-        ).count()
-        
-        # Contar registros con códigos postales
-        postal_codes_count = base_zones.exclude(
-            Q(postal_code_from__isnull=True) | Q(postal_code_from='')
-        ).count()
-        
-        # Determinar patrones (considerar service_area como indicador de ciudades)
-        has_states = (states_count / total_records) > 0.1  # >10% tienen estados
-        has_cities = (cities_count / total_records) > 0.1  # >10% tienen city_name
-        has_service_areas = (service_area_count / total_records) > 0.1  # >10% tienen service_area
-        has_postal_codes = (postal_codes_count / total_records) > 0.1  # >10% tienen códigos postales
-        
-        # Si no hay city_name pero sí service_area, usar service_area como ciudades
+        states_count = base_zones.exclude(Q(state_code__isnull=True) | Q(state_code='')).count()
+        cities_count = base_zones.exclude(Q(city_name__isnull=True) | Q(city_name='')).count()
+        service_area_count = base_zones.exclude(Q(service_area__isnull=True) | Q(service_area='')).count()
+        postal_codes_count = base_zones.exclude(Q(postal_code_from__isnull=True) | Q(postal_code_from='')).count()
+
+        has_states = (states_count / total_records) > 0.1
+        has_cities = (cities_count / total_records) > 0.1
+        has_service_areas = (service_area_count / total_records) > 0.1
+        has_postal_codes = (postal_codes_count / total_records) > 0.1
+
+        # Complementar con ServiceAreaCityMap para detectar ciudades aunque ServiceZone no las tenga pobladas
+        try:
+            from .models import ServiceAreaCityMap
+            map_city_exists = ServiceAreaCityMap.objects.filter(
+                country_code=country_code.upper()
+            ).exclude(city_name='').exists()
+            if map_city_exists:
+                has_cities = True
+        except Exception:
+            pass
+
         effective_cities = has_cities or has_service_areas
-        
-        # Determinar patrón principal
+
         if has_postal_codes and not effective_cities:
             pattern = 'POSTAL_CODES'
         elif effective_cities and not has_postal_codes:
@@ -3508,25 +4002,31 @@ def analyze_country_structure(request, country_code):
             pattern = 'STATES'
         else:
             pattern = 'BASIC'
-        
-        # Obtener ejemplos de datos
+
+        # Recomendación de campo de ciudad
+        # Siempre preferir city_name cuando esté disponible para evitar mostrar códigos (YMG, YHM) al usuario
+        # Excepción: solo cuando NO haya city_name disponible, caer a service_area
+        if has_cities:
+            recommended_city_field = 'city_name'
+        else:
+            recommended_city_field = 'service_area' if has_service_areas else 'city_name'
+
         examples = []
-        sample_zones = base_zones[:3]  # Obtener muestra para ejemplos
-        for zone in sample_zones:
+        for zone in base_zones[:3]:
             examples.append({
                 'country': zone.country_name,
                 'state': zone.state_code or zone.state_name,
                 'city': zone.city_name,
-                'service_area': zone.service_area,  # Códigos como BOG, MED, BAQ
+                'service_area': zone.service_area,
                 'postal_range': f"{zone.postal_code_from}-{zone.postal_code_to}" if zone.postal_code_from else None
             })
-        
+
         return Response({
             'success': True,
             'country_code': country_code,
             'country_name': base_zones.first().country_name,
             'hasStates': has_states,
-            'hasCities': effective_cities,  # Usar la lógica combinada
+            'hasCities': effective_cities,
             'hasPostalCodes': has_postal_codes,
             'pattern': pattern,
             'statistics': {
@@ -3540,20 +4040,19 @@ def analyze_country_structure(request, country_code):
             'data_structure': {
                 'city_name_available': has_cities,
                 'service_area_available': has_service_areas,
-                'recommended_city_field': 'service_area' if has_service_areas and not has_cities else 'city_name'
+                'recommended_city_field': recommended_city_field
             },
             'recommendations': {
                 'priority_fields': [
-                    'country' if True else '',
+                    'country',
                     'state' if has_states else '',
                     'city' if effective_cities else '',
                     'postal_code' if has_postal_codes else ''
                 ],
                 'search_strategy': 'postal_code' if pattern == 'POSTAL_CODES' else 'city' if pattern == 'CITY' else 'mixed',
-                'city_field_to_use': 'service_area' if has_service_areas and not has_cities else 'city_name'
+                'city_field_to_use': recommended_city_field
             }
         })
-        
     except Exception as e:
         logger.error(f"Error analizando estructura del país {country_code}: {str(e)}")
         return Response({
@@ -3617,3 +4116,49 @@ def resolve_service_area_display(request):
             'message': 'Ha ocurrido un error',
             'error': str(e)
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def map_stats_by_country(request, country_code):
+    """
+    Diagnóstico: devuelve conteos de ServiceAreaCityMap para un país.
+    Útil para comprobar que el API apunta a la BD con el dataset completo.
+    """
+    try:
+        from .models import ServiceAreaCityMap
+
+        cc = (country_code or '').upper()
+        qs = ServiceAreaCityMap.objects.filter(country_code=cc)
+        total_rows = qs.count()
+        distinct_cities = qs.exclude(city_name='').values_list('city_name', flat=True).distinct().count()
+        distinct_service_areas = qs.exclude(service_area='').values_list('service_area', flat=True).distinct().count()
+
+        sample = list(
+            qs.exclude(city_name='')
+              .values_list('city_name', flat=True)
+              .distinct()[:10]
+        )
+
+        db_conf = settings.DATABASES.get('default', {})
+        db_info = {
+            'engine': db_conf.get('ENGINE', ''),
+            'name': db_conf.get('NAME', ''),
+            'host': db_conf.get('HOST', ''),
+            'port': db_conf.get('PORT', ''),
+        }
+
+        return Response({
+            'success': True,
+            'country_code': cc,
+            'totals': {
+                'rows': total_rows,
+                'distinct_cities': distinct_cities,
+                'distinct_service_areas': distinct_service_areas,
+            },
+            'sample_cities': sample,
+            'db': db_info
+        }, status=status.HTTP_200_OK)
+    except Exception as e:
+        logger.error(f"Error en map_stats_by_country: {e}")
+        return Response({'success': False, 'message': 'Error', 'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

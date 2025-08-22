@@ -6,6 +6,11 @@ import logging
 import pytz
 import re
 import uuid
+import json
+import unicodedata
+from decimal import Decimal, ROUND_HALF_UP
+from django.db.models import Q
+from .models import CountryISO
 
 logger = logging.getLogger(__name__)
 
@@ -15,10 +20,14 @@ class DHLService:
         self.password = password
         self.base_url = base_url
         self.environment = environment
-        
-        logger.info(f"Initializing DHLService with environment: {environment}")
-        logger.info(f"Base URL: {base_url}")
-        
+        # Lazy country map cache
+        self._country_map_loaded = False
+        self._country_name_to_code = {}
+        self._country_codes_set = set()
+
+        logger.info(f"Initializing DHLService with environment: {self.environment}")
+        logger.info(f"Base URL: {self.base_url}")
+
         # Configuración de endpoints DHL - API REST moderna (solo JSON)
         # Solo endpoints de producción
         self.endpoints = {
@@ -30,8 +39,174 @@ class DHLService:
             "address": "https://express.api.dhl.com/mydhlapi/address-validate",
             "epod": "https://express.api.dhl.com/mydhlapi/shipments/{}/proof-of-delivery"
         }
-        
+
         logger.info(f"REST Endpoints configured: {self.endpoints}")
+
+    def _normalize_str(self, text: str) -> str:
+        """Normaliza strings a MAYÚSCULAS sin acentos ni caracteres especiales."""
+        if not text:
+            return ""
+        try:
+            s = str(text).strip().upper()
+            s = unicodedata.normalize('NFKD', s)
+            s = ''.join(c for c in s if not unicodedata.combining(c))
+            s = re.sub(r'[^A-Z ]', ' ', s)
+            s = re.sub(r'\s+', ' ', s).strip()
+            return s
+        except Exception:
+            # Fallback simple
+            return str(text).strip().upper()
+
+    def _load_country_map(self):
+        """Carga countries.json una sola vez para mapear NOMBRE → ISO alpha-2."""
+        if self._country_map_loaded:
+            return
+        try:
+            project_root = os.path.dirname(os.path.dirname(__file__))
+            countries_path = os.path.join(project_root, 'countries.json')
+            with open(countries_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            items = data.get('data', []) if isinstance(data, dict) else []
+            for item in items:
+                code = str(item.get('country_code', '')).upper().strip()
+                name = self._normalize_str(item.get('country_name', ''))
+                if code and len(code) == 2:
+                    self._country_codes_set.add(code)
+                if name and code:
+                    self._country_name_to_code[name] = code
+            # Sinónimos comunes (ES/EN/alpha-3 frecuentes)
+            synonyms = {
+                'UNITED STATES': 'US',
+                'UNITED STATES OF AMERICA': 'US',
+                'USA': 'US',
+                'COLOMBIA': 'CO',
+                'COL': 'CO',
+                'PANAMA': 'PA',
+                'PANAMA CITY': 'PA',
+                'MEXICO': 'MX',
+                'MEXICO CITY': 'MX',
+                'CANADA': 'CA',
+                'CANADA (CA)': 'CA',
+            }
+            for k, v in synonyms.items():
+                self._country_name_to_code[self._normalize_str(k)] = v
+                self._country_codes_set.add(v)
+            self._country_map_loaded = True
+            logger.info(f"Country map loaded: {len(self._country_name_to_code)} names, {len(self._country_codes_set)} codes")
+        except Exception as e:
+            logger.warning(f"Could not load countries.json for normalization: {str(e)}")
+            self._country_map_loaded = True  # Evitar reintentos en caliente
+
+    def _normalize_country_code(self, value, default: str | None = None) -> str:
+        """Normaliza countryCode a ISO-3166-1 alpha-2 (2 letras) priorizando DB (CountryISO).
+
+        Orden de resolución:
+        1) DB CountryISO: code (ISO-2) exacto.
+        2) DB CountryISO: alt_code (alpha-3) exacto.
+        3) DB CountryISO: nombres exactos (iso_short_name, iso_full_name, dhl_short_name) case-insensitive.
+        4) Fallback local: countries.json + sinónimos comunes.
+        5) Heurística: primeras 2 letras si son ISO-2 conocidas del catálogo local.
+        6) default o valor original en mayúsculas.
+        """
+        try:
+            if not value:
+                return default or value
+            raw = str(value).strip().upper()
+            norm = self._normalize_str(raw)
+
+            # 1) DB: code exacto (ISO-2)
+            try:
+                if len(raw) == 2 and CountryISO.objects.filter(code=raw).exists():
+                    return raw
+            except Exception:
+                pass
+
+            # 2) DB: alt_code (alpha-3)
+            try:
+                if len(raw) == 3:
+                    obj = CountryISO.objects.filter(alt_code=raw).only('code').first()
+                    if obj and obj.code:
+                        return obj.code.upper()
+            except Exception:
+                pass
+
+            # 3) DB: por nombres exactos (case-insensitive)
+            try:
+                obj = CountryISO.objects.filter(
+                    Q(iso_short_name__iexact=value) |
+                    Q(iso_full_name__iexact=value) |
+                    Q(dhl_short_name__iexact=value)
+                ).only('code').first()
+                if obj and obj.code:
+                    return obj.code.upper()
+            except Exception:
+                pass
+
+            # 4) Fallback local: countries.json + sinónimos
+            self._load_country_map()
+
+            # Ya es ISO-2 válido en catálogo local
+            if len(raw) == 2 and raw in self._country_codes_set:
+                return raw
+            if len(norm) == 2 and norm in self._country_codes_set:
+                return norm
+
+            # Alpha-3 comunes locales
+            alpha3_map = {
+                'USA': 'US', 'COL': 'CO', 'MEX': 'MX', 'PAN': 'PA', 'CAN': 'CA',
+                'ARG': 'AR', 'BRA': 'BR', 'PER': 'PE', 'CHL': 'CL', 'ECU': 'EC',
+                'VEN': 'VE', 'URY': 'UY', 'PRY': 'PY', 'BOL': 'BO'
+            }
+            if raw in alpha3_map:
+                return alpha3_map[raw]
+            if norm in alpha3_map:
+                return alpha3_map[norm]
+
+            # Por nombre en catálogo local
+            if norm in self._country_name_to_code:
+                return self._country_name_to_code[norm]
+
+            # 5) Heurística por primeras 2 letras si están en catálogo local
+            maybe = norm[:2]
+            if len(maybe) == 2 and maybe in self._country_codes_set:
+                return maybe
+
+            # 6) default u original
+            return default or raw
+        except Exception:
+            return default or (str(value).strip().upper() if value else value)
+
+    def _round_half_up(self, value, ndigits: int = 2) -> float:
+        """Redondeo consistente HALF_UP (2 decimales por defecto).
+
+        DHL y la UI esperan 2 decimales con redondeo estándar (0.5 hacia arriba).
+        Python round usa banker’s rounding; por eso usamos Decimal.
+        """
+        try:
+            q = '0.' + ('0' * (ndigits - 1)) + '1' if ndigits > 0 else '1'
+            return float(Decimal(str(value)).quantize(Decimal(q), rounding=ROUND_HALF_UP))
+        except Exception:
+            # Fallback seguro si algo raro ocurre
+            return round(float(value), ndigits)
+
+    def _to_float_weight(self, value) -> float:
+        """Convierte un campo de peso (número, string o dict con 'value') a float seguro."""
+        try:
+            if value is None:
+                return 0.0
+            if isinstance(value, (int, float)):
+                return float(value)
+            if isinstance(value, str):
+                return float(value.strip()) if value.strip() else 0.0
+            if isinstance(value, dict):
+                # Formatos comunes: { value: 12.34, unitText: 'kg' }
+                if 'value' in value:
+                    return float(value.get('value') or 0.0)
+                # A veces viene { totalWeight: { value: X } } ya cubierto antes
+                # Cualquier otro formato no soportado: retornar 0
+                return 0.0
+        except Exception:
+            return 0.0
 
     def _get_rest_headers(self):
         """Genera headers para requests REST JSON"""
@@ -309,6 +484,17 @@ class DHLService:
             dest_city = self._clean_text(destination.get('city', destination.get('cityName', 'MIA')))
             dest_postal = destination.get('postal_code', destination.get('postalCode', '25134'))
             dest_country = destination.get('country', destination.get('countryCode', 'CO'))  # Cambiar default de US a CO
+
+            # Normalizar countryCode a ISO-2 sin cambiar la estructura del payload
+            normalized_origin_country = self._normalize_country_code(origin_country, default='PA')
+            normalized_dest_country = self._normalize_country_code(dest_country, default='CO')
+            if normalized_origin_country != origin_country or normalized_dest_country != dest_country:
+                logger.info(
+                    f"Normalizing country codes for Rate: origin {origin_country} -> {normalized_origin_country}, "
+                    f"destination {dest_country} -> {normalized_dest_country}"
+                )
+            origin_country = normalized_origin_country
+            dest_country = normalized_dest_country
             
             # Preparar datos para API REST
             import base64
@@ -876,26 +1062,35 @@ class DHLService:
                         "raw_response": response.text[:500]
                     }
                 
+                # Parse específico por tipo y adjuntar metadatos HTTP/headers
                 if service_type == "Rate":
-                    return self._parse_rest_rate_response(data)
+                    parsed = self._parse_rest_rate_response(data)
                 elif service_type == "Tracking":
-                    return self._parse_rest_tracking_response(data)
+                    parsed = self._parse_rest_tracking_response(data)
                 elif service_type == "ePOD":
-                    return self._parse_rest_epod_response(data)
+                    parsed = self._parse_rest_epod_response(data)
                 elif service_type == "Shipment":
                     # Para shipments exitosos, extraer el tracking number
-                    return {
+                    parsed = {
                         "success": True,
                         "tracking_number": data.get('shipmentTrackingNumber', ''),
                         "shipment_data": data,
                         "message": "Envío creado exitosamente"
                     }
                 else:
-                    return {
+                    parsed = {
                         "success": True,
                         "data": data,
                         "message": "Respuesta procesada exitosamente"
                     }
+
+                # Adjuntar metadatos de HTTP para diagnósticos completos
+                try:
+                    parsed['http_status'] = response.status_code
+                    parsed['response_headers'] = dict(response.headers)
+                except Exception:
+                    pass
+                return parsed
             
             elif response.status_code >= 400:
                 # Mensaje genérico para todos los errores, incluyendo un preview de la respuesta cruda
@@ -936,15 +1131,22 @@ class DHLService:
             if not location_details:
                 return "Unknown"
             
-            # Para shipperDetails/receiverDetails
-            if 'postalAddress' in location_details:
+            # Para shipperDetails/receiverDetails - Priorizar serviceArea sobre postalAddress
+            if 'serviceArea' in location_details and location_details['serviceArea']:
+                # serviceArea contiene la información real en formato "Ciudad-CÓDIGO"
+                service_area = location_details['serviceArea'][0]  # Primer elemento
+                return service_area.get('description', 'Unknown')
+            
+            # Fallback: Para shipperDetails/receiverDetails con postalAddress (generalmente vacío)
+            elif 'postalAddress' in location_details:
                 postal = location_details['postalAddress']
                 city = postal.get('cityName', '')
                 country = postal.get('countryCode', '')
-                service_areas = location_details.get('serviceArea', [])
                 
-                if service_areas and len(service_areas) > 0:
-                    return service_areas[0].get('description', f"{city}, {country}".strip(', '))
+                # Si cityName está vacío, usar serviceArea si está disponible
+                if not city and 'serviceArea' in location_details and location_details['serviceArea']:
+                    return location_details['serviceArea'][0].get('description', f"{city}, {country}".strip(', '))
+                
                 return f"{city}, {country}".strip(', ') or "Unknown"
             
             # Para eventos de tracking con location/address
@@ -1046,6 +1248,40 @@ class DHLService:
                 'weight_unit': shipment.get('unitOfMeasurements', shipment.get('details', {}).get('totalWeight', {}).get('unitText', 'kg') if isinstance(shipment.get('details', {}).get('totalWeight', {}), dict) else 'kg'),
                 'number_of_pieces': shipment.get('numberOfPieces', shipment.get('details', {}).get('numberOfPieces', 0))
             }
+
+            # Volumetric/dimensional weight a nivel envío si DHL lo provee
+            try:
+                dhl_total_dim = None
+                # Posibles ubicaciones
+                candidates = [
+                    shipment.get('volumetricWeight'),
+                    shipment.get('dimensionalWeight'),
+                    shipment.get('details', {}).get('volumetricWeight') if isinstance(shipment.get('details', {}), dict) else None,
+                    shipment.get('details', {}).get('dimensionalWeight') if isinstance(shipment.get('details', {}), dict) else None,
+                ]
+                for c in candidates:
+                    if c is None:
+                        continue
+                    if isinstance(c, dict):
+                        v = c.get('value')
+                    else:
+                        v = c
+                    if v is not None:
+                        dhl_total_dim = self._to_float_weight(v)
+                        break
+                if dhl_total_dim is not None:
+                    shipment_info['dhl_total_dimensional_weight'] = self._round_half_up(dhl_total_dim, 2)
+            except Exception:
+                pass
+
+            # Normalizar unidad y redondear total_weight
+            try:
+                shipment_info['total_weight'] = self._round_half_up(self._to_float_weight(shipment_info.get('total_weight', 0)), 2)
+                unit = str(shipment_info.get('weight_unit', 'kg')).lower()
+                if unit in ('metric', 'kg', 'kilogram', 'kilograms', 'kilos'):
+                    shipment_info['weight_unit'] = 'kg'
+            except Exception:
+                pass
             
             # Eventos de tracking
             events = []
@@ -1080,28 +1316,71 @@ class DHLService:
             piece_details = shipment.get('pieces', [])
             for piece in piece_details:
                 # Extraer peso declarado y repesaje
-                peso_declarado = piece.get('weight', 0)
-                peso_repesaje = piece.get('actualWeight', 0)
+                peso_declarado = self._to_float_weight(piece.get('weight', 0))
+                peso_repesaje = self._to_float_weight(piece.get('actualWeight', 0))
+                # Extraer peso dimensional/volumétrico provisto por DHL si existe
+                dhl_dim_weight = None
+                try:
+                    # Claves posibles según variantes del API
+                    candidates = [
+                        piece.get('dimensionalWeight'),
+                        piece.get('volumetricWeight'),
+                        piece.get('dimWeight'),
+                    ]
+                    # Algunos endpoints anidan como { dimensionalWeight: { value: X } }
+                    for c in candidates:
+                        if c is None:
+                            continue
+                        if isinstance(c, dict):
+                            v = c.get('value')
+                        else:
+                            v = c
+                        if v is not None:
+                            dhl_dim_weight = self._to_float_weight(v)
+                            break
+                except Exception:
+                    dhl_dim_weight = None
                 
                 piece_data = {
                     'piece_id': piece.get('trackingNumber', piece.get('number', '')),
                     'description': piece.get('description', ''),
-                    'peso_declarado': float(peso_declarado) if peso_declarado else 0,
-                    'repesaje': float(peso_repesaje) if peso_repesaje else 0,
-                    'weight': float(peso_repesaje) if peso_repesaje else float(peso_declarado) if peso_declarado else 0,
+                    'peso_declarado': self._round_half_up(peso_declarado, 2) if peso_declarado else 0,
+                    'repesaje': self._round_half_up(peso_repesaje, 2) if peso_repesaje else 0,
+                    'weight': self._round_half_up(peso_repesaje, 2) if peso_repesaje else self._round_half_up(peso_declarado, 2) if peso_declarado else 0,
                     'weight_unit': piece.get('unitOfMeasurements', 'kg'),
                     'dimensions': piece.get('dimensions', {}),
                     'type_code': piece.get('typeCode', ''),
                     'package_type': piece.get('packageType', ''),
+                    # Peso dimensional según DHL si está disponible
+                    'dhl_dimensional_weight': self._round_half_up(dhl_dim_weight, 2) if dhl_dim_weight else 0,
                     # Información adicional de peso para compatibilidad
                     'weight_info': {
                         'declared_weight': float(peso_declarado) if peso_declarado else 0,
                         'actual_weight_reweigh': float(peso_repesaje) if peso_repesaje else 0,
                         'chargeable_weight': float(peso_repesaje) if peso_repesaje else float(peso_declarado) if peso_declarado else 0,
-                        'unit': piece.get('unitOfMeasurements', 'kg')
+                        'unit': piece.get('unitOfMeasurements', 'kg'),
+                        'dhl_dimensional_weight': float(dhl_dim_weight) if dhl_dim_weight else 0
                     }
                 }
                 pieces.append(piece_data)
+
+            # Corrección del total_weight: usar el MAYOR peso entre las piezas con redondeo HALF_UP
+            # Contexto: algunos envíos multi-pieza devuelven totalWeight con 1 decimal (p.ej. 148.4),
+            # mientras que el negocio requiere mostrar el mayor de las 3 piezas (p.ej. 148.85).
+            try:
+                piece_weights = [float(p.get('weight') or 0) if p.get('weight') is not None else 0 for p in pieces]
+                if piece_weights:
+                    max_piece_weight = max(piece_weights)
+                    max_piece_weight = self._round_half_up(max_piece_weight, 2)
+                    # Tomar el máximo entre lo que vino en shipment y el mayor de piezas (ambos redondeados)
+                    original_total = self._round_half_up(shipment_info.get('total_weight', 0), 2)
+                    corrected_total = max(original_total, max_piece_weight)
+                    shipment_info['total_weight'] = corrected_total
+                    # Anotar fuente para debugging sin romper compatibilidad
+                    shipment_info['weight_source'] = 'max_piece_weight'
+                    shipment_info['original_total_weight'] = original_total
+            except Exception as _e:
+                logger.debug(f"Weight correction skipped: {_e}")
             
             return {
                 "success": True,

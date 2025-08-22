@@ -93,6 +93,7 @@ jspm_packages/
 dhl_api/ESD.TXT
 dhl_api/ESD-sample.TXT
 dhl_api/Postal_Locations_fullset_*.csv
+dhl_api/ISO_Country_Codes_fullset_*.csv
 
 # Base de datos local
 db.sqlite3

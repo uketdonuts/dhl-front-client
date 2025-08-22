@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import PropTypes from 'prop-types';
 import SmartLocationDropdown from '../SmartLocationDropdown';
 import RateResults from '../RateResults';
@@ -47,6 +47,105 @@ const RateTabImproved = ({
     serviceArea: rateData.destination.service_area || '',
   // serviceAreaName intentionally not tracked for payload
   });
+
+  // Ref para forzar actualización de los dropdowns
+  const [forceUpdateFlag, setForceUpdateFlag] = useState(0);
+
+  // 🔄 Sincronizar dropdowns cuando rateData cambie (ej: desde tracking)
+  useEffect(() => {
+    console.log('🔄 RateData cambió, sincronizando dropdowns...', {
+      origin: rateData.origin,
+      destination: rateData.destination,
+      originCountryName: rateData.origin_country_name,
+      destinationCountryName: rateData.destination_country_name
+    });
+    
+    // Crear un pequeño delay para permitir que todas las actualizaciones se procesen
+    const timeoutId = setTimeout(() => {
+      // Actualizar dropdown de origen con datos completos
+      setOriginLocation(prev => {
+        const newOriginLocation = {
+          country: rateData.origin.country || '',
+          countryName: rateData.origin_country_name || '',
+          state: rateData.origin.state || '',
+          stateName: prev.stateName || '',
+          city: rateData.origin.city || '',
+          cityName: rateData.origin.city || '',
+          postalCode: rateData.origin.postal_code || '',
+          postalCodeRange: prev.postalCodeRange || '',
+          serviceArea: rateData.origin.service_area || '',
+        };
+        
+        // Solo actualizar si hay cambios para evitar re-renders innecesarios
+        const hasChanges = (
+          prev.country !== newOriginLocation.country ||
+          prev.city !== newOriginLocation.city ||
+          prev.countryName !== newOriginLocation.countryName ||
+          prev.postalCode !== newOriginLocation.postalCode
+        );
+        
+        if (hasChanges) {
+          console.log('✅ Actualizando dropdown origen:', {
+            anterior: prev,
+            nuevo: newOriginLocation
+          });
+          // Forzar actualización si es necesario
+          setForceUpdateFlag(flag => flag + 1);
+          return newOriginLocation;
+        }
+        return prev;
+      });
+
+      // Actualizar dropdown de destino con datos completos
+      setDestinationLocation(prev => {
+        const newDestinationLocation = {
+          country: rateData.destination.country || '',
+          countryName: rateData.destination_country_name || '',
+          state: rateData.destination.state || '',
+          stateName: prev.stateName || '',
+          city: rateData.destination.city || '',
+          cityName: rateData.destination.city || '',
+          postalCode: rateData.destination.postal_code || '',
+          postalCodeRange: prev.postalCodeRange || '',
+          serviceArea: rateData.destination.service_area || '',
+        };
+        
+        // Solo actualizar si hay cambios para evitar re-renders innecesarios
+        const hasChanges = (
+          prev.country !== newDestinationLocation.country ||
+          prev.city !== newDestinationLocation.city ||
+          prev.countryName !== newDestinationLocation.countryName ||
+          prev.postalCode !== newDestinationLocation.postalCode
+        );
+        
+        if (hasChanges) {
+          console.log('✅ Actualizando dropdown destino:', {
+            anterior: prev,
+            nuevo: newDestinationLocation
+          });
+          // Forzar actualización si es necesario
+          setForceUpdateFlag(flag => flag + 1);
+          return newDestinationLocation;
+        }
+        return prev;
+      });
+    }, 200); // Delay más largo para asegurar que los datos se procesen
+
+    return () => clearTimeout(timeoutId);
+  }, [
+    rateData.origin.country,
+    rateData.origin.city,
+    rateData.origin.postal_code,
+    rateData.origin.state,
+    rateData.origin.service_area,
+    rateData.origin_country_name,
+    rateData.destination.country,
+    rateData.destination.city,
+    rateData.destination.postal_code,
+    rateData.destination.state,
+    rateData.destination.service_area,
+    rateData.destination_country_name
+  ]);
 
   // Manejar cambios en origen
   const handleOriginLocationChange = useCallback((location) => {
@@ -139,6 +238,7 @@ const RateTabImproved = ({
               
               <div className="card-body">
                 <SmartLocationDropdown
+                  key={`origin-${originLocation.country}-${originLocation.city}-${forceUpdateFlag}`}
                   onChange={handleOriginLocationChange}
                   value={originLocation}
                   required={true}
@@ -164,6 +264,7 @@ const RateTabImproved = ({
               
               <div className="card-body">
                 <SmartLocationDropdown
+                  key={`destination-${destinationLocation.country}-${destinationLocation.city}-${forceUpdateFlag}`}
                   onChange={handleDestinationLocationChange}
                   value={destinationLocation}
                   required={true}

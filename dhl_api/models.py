@@ -4,6 +4,51 @@ from django.contrib.auth.models import User
 from django.utils import timezone
 import json
 
+class CountryISO(models.Model):
+    """Catálogo ISO de países para normalizar nombres.
+
+    Fuente: ISO_Country_Codes_fullset_*.csv
+    """
+
+    code = models.CharField(max_length=2, unique=True, help_text="Código ISO alpha-2")
+    iso_short_name = models.CharField(max_length=200, blank=True)
+    iso_full_name = models.CharField(max_length=255, blank=True)
+    dhl_short_name = models.CharField(max_length=200, blank=True)
+    currency_code = models.CharField(max_length=3, blank=True)
+    numeric_code = models.CharField(max_length=3, blank=True)
+    alt_code = models.CharField(max_length=3, blank=True, help_text="ISO Alternate Code",)
+    dial_in = models.CharField(max_length=10, blank=True)
+    dial_out = models.CharField(max_length=10, blank=True)
+    independent = models.CharField(max_length=1, blank=True, help_text="Y/N")
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'País ISO'
+        verbose_name_plural = 'Países ISO'
+        indexes = [
+            models.Index(fields=['code'])
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.display_name} ({self.code})"
+
+    @property
+    def display_name(self) -> str:
+        name = (self.iso_short_name or self.iso_full_name or self.dhl_short_name or self.code or '').strip()
+        return name.upper()
+
+    @classmethod
+    def resolve_name(cls, code: str, fallback: str | None = None) -> str:
+        """Resuelve el nombre normalizado desde DB; fallback a valor provisto o código."""
+        if not code:
+            return fallback or ''
+        obj = cls.objects.filter(code=code.upper()).only('iso_short_name', 'iso_full_name', 'dhl_short_name').first()
+        if obj:
+            return obj.display_name
+        return (fallback or code).upper()
+
 
 class Shipment(models.Model):
     """Modelo para almacenar información de envíos"""
@@ -569,6 +614,20 @@ class ServiceZone(models.Model):
         
         use_city_name = (city_name_count / total) > 0.1
         use_service_area = (service_area_count / total) > 0.1
+
+        # Elegir el campo que ofrezca mayor cobertura de opciones visibles.
+        # Si ambos existen, preferir el que tenga más distintos.
+        if use_city_name and use_service_area:
+            distinct_cities = queryset.exclude(Q(city_name__isnull=True) | Q(city_name='')) \
+                                     .values_list('city_name', flat=True).distinct().count()
+            distinct_areas = queryset.exclude(Q(service_area__isnull=True) | Q(service_area='')) \
+                                    .values_list('service_area', flat=True).distinct().count()
+            if distinct_areas > distinct_cities:
+                use_city_name = False
+                use_service_area = True
+            else:
+                use_city_name = True
+                use_service_area = False
         
         if use_city_name:
             # Países como Panamá - usar city_name
@@ -669,6 +728,8 @@ class ServiceAreaCityMap(models.Model):
         indexes = [
             models.Index(fields=['country_code', 'service_area']),
             models.Index(fields=['country_code', 'state_code', 'service_area']),
+            models.Index(fields=['country_code', 'city_name']),
+            models.Index(fields=['country_code', 'state_code', 'city_name']),
         ]
         unique_together = [
             ['country_code', 'state_code', 'service_area', 'postal_code_from', 'postal_code_to']

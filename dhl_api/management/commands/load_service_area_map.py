@@ -30,6 +30,9 @@ class Command(BaseCommand):
         parser.add_argument('--derive-service-area', action='store_true', help='Derivar service_area usando ServiceZone por código postal')
         parser.add_argument('--start-row', type=int, default=0, help='Saltar N filas de datos (no cuenta el header)')
         parser.add_argument('--progress-every', type=int, default=100000, help='Mostrar progreso cada N filas procesadas')
+        parser.add_argument('--format', type=str, default='auto', choices=['auto', 'postal_locations'],
+                            help='Formato del archivo CSV. "postal_locations" para el fullset sin encabezados')
+        parser.add_argument('--no-header', action='store_true', help='Indica que el CSV no tiene encabezados')
 
     def handle(self, *args, **options):
         file_path = options['file']
@@ -51,7 +54,11 @@ class Command(BaseCommand):
 
         ext = os.path.splitext(file_path)[1].lower()
         if ext == '.csv':
-            records, csv_meta = self._read_csv_stream(file_path, delimiter_opt)
+            if options.get('format') == 'postal_locations':
+                # CSV sin encabezado con columnas fijas del fullset de ubicaciones postales
+                records, csv_meta = self._read_postal_locations_csv(file_path, delimiter_opt, has_header=not options.get('no_header'))
+            else:
+                records, csv_meta = self._read_csv_stream(file_path, delimiter_opt)
         elif ext in ('.json', '.jsonl'):
             records = self._read_json(file_path)
             csv_meta = {'source': 'json'}
@@ -94,6 +101,12 @@ class Command(BaseCommand):
                     if sa:
                         service_area = sa
 
+            # Si solo hay un código postal (pc) y no hay rango, usarlo como from/to para que endpoints funcionen
+            if pc and not pfrom and not pto:
+                pc_norm = _normalize_postal(pc)
+                pfrom = pc_norm
+                pto = pc_norm
+
             # Derivar display_name si falta
             if not display_name:
                 if city_name and pc:
@@ -102,6 +115,19 @@ class Command(BaseCommand):
                     display_name = f"{city_name} {pfrom}-{pto}"
                 elif city_name:
                     display_name = city_name
+
+            # Validar país: solo aceptamos códigos ISO2
+            if len(country_code) != 2:
+                return {
+                    'country_code': '',
+                    'state_code': state_code,
+                    'service_area': service_area,
+                    'city_name': city_name,
+                    'display_name': display_name,
+                    'postal_code_from': pfrom,
+                    'postal_code_to': pto,
+                    'notes': f"SKIPPED_INVALID_COUNTRY({country_code}) " + notes,
+                }
 
             return {
                 'country_code': country_code,
@@ -113,7 +139,6 @@ class Command(BaseCommand):
                 'postal_code_to': pto,
                 'notes': notes,
             }
-
         try:
             processed = 0
             seen_any = False
@@ -207,6 +232,47 @@ class Command(BaseCommand):
             reader2 = csv.DictReader(f2, delimiter=delimiter)
             columns = reader2.fieldnames or []
         return iterator(), {'delimiter': delimiter, 'columns': columns}
+
+    def _read_postal_locations_csv(self, path: str, delimiter_opt: str = '', has_header: bool = False) -> Tuple[Iterable[dict], Dict[str, str]]:
+        """
+        Lector para el CSV de Postal_Locations_fullset (sin encabezados), con columnas:
+        0: country_code, 1: service_area, 2: city_name, 3: (unused), 4: postal_code,
+        5-7: (unused), 8: state_code, 9: state_name
+
+        Devuelve un iterador de dicts con claves canónicas usadas por normalize().
+        """
+        # Sniff delimitador
+        with open(path, 'r', encoding='utf-8-sig', newline='') as sniff:
+            sample = sniff.read(8192)
+            delimiter = delimiter_opt
+            if not delimiter:
+                try:
+                    dialect = csv.Sniffer().sniff(sample, delimiters=",;\t|")
+                    delimiter = dialect.delimiter
+                except Exception:
+                    delimiter = ','
+
+        def iterator():
+            with open(path, 'r', encoding='utf-8-sig', newline='') as f:
+                reader = csv.reader(f, delimiter=delimiter)
+                row_idx = 0
+                for row in reader:
+                    row_idx += 1
+                    if has_header and row_idx == 1:
+                        # Saltar encabezado si lo hay
+                        continue
+                    # Asegurar longitud mínima
+                    cols = row + [''] * (10 - len(row))
+                    yield {
+                        'country_code': (cols[0] or '').strip(),
+                        'service_area': (cols[1] or '').strip(),
+                        'city_name': (cols[2] or '').strip(),
+                        'PostalCode': (cols[4] or '').strip(),
+                        'state_code': (cols[8] or '').strip(),
+                        # display_name y rangos se derivan en normalize()
+                    }
+
+        return iterator(), {'delimiter': delimiter, 'columns': ['0','1','2','3','4','5','6','7','8','9'], 'format': 'postal_locations'}
 
     def _read_json(self, path: str) -> List[dict]:
         with open(path, 'r', encoding='utf-8') as f:

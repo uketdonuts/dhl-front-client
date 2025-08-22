@@ -121,8 +121,9 @@ class ServiceZoneService {
    * Analiza la estructura de datos disponible para un país específico (con cache)
    */
   async analyzeCountryStructure(countryCode) {
-    // Intentar obtener del cache primero
-    const cached = this._getCache('countryAnalysis', countryCode);
+  // Intentar obtener del cache primero (versionado para bustear caché vieja)
+  const cacheKey = `${countryCode}:v2`;
+  const cached = this._getCache('countryAnalysis', cacheKey);
     if (cached) {
       return cached;
     }
@@ -146,7 +147,7 @@ class ServiceZoneService {
       };
       
       // Guardar en cache (TTL largo porque la estructura del país no cambia)
-      this._setCache('countryAnalysis', countryCode, result);
+  this._setCache('countryAnalysis', cacheKey, result);
       
       return result;
     } catch (error) {
@@ -166,7 +167,7 @@ class ServiceZoneService {
       };
       
       // Guardar fallback en cache por menos tiempo
-      this._setCache('countryAnalysis', countryCode, fallbackResult, 2 * 60 * 1000); // 2 minutos
+  this._setCache('countryAnalysis', cacheKey, fallbackResult, 2 * 60 * 1000); // 2 minutos
       
       return fallbackResult;
     }
@@ -259,36 +260,52 @@ class ServiceZoneService {
    * @param {string} countryCode - Código de país ISO (2 letras)
    * @param {string} stateCode - Código de estado/provincia (opcional)
    */
-  async getCitiesByCountryState(countryCode, stateCode = null) {
+  async getCitiesByCountryState(countryCode, stateCode = null, options = {}) {
     if (!countryCode) {
       throw new Error('Código de país requerido');
     }
 
-    const cacheKey = `${countryCode.toUpperCase()}${stateCode ? `_${stateCode.toUpperCase()}` : ''}`;
+  // Para Canadá, SIEMPRE usar endpoint por país (sin estado)
+  const cc = countryCode.toUpperCase();
+  const effectiveState = cc === 'CA' ? null : stateCode;
+
+  // Incluir una pista en la clave de caché para diferenciar el origen preferido
+  const baseKey = `${cc}${effectiveState ? `_${effectiveState.toUpperCase()}` : ''}_prefmap_v3`;
+  const cacheKey = options.q ? `${baseKey}_q:${String(options.q).toLowerCase()}` : baseKey;
     
     // Intentar obtener del cache primero
-    const cached = this._getCache('cities', cacheKey);
-    if (cached) {
+  const cached = this._getCache('cities', cacheKey);
+  if (cached && !options.bypassCache) {
       return cached;
     }
 
     try {
-      let endpoint = `/service-zones/cities/${countryCode.toUpperCase()}/`;
-      if (stateCode) {
-        endpoint += `${stateCode.toUpperCase()}/`;
+      let endpoint = `/service-zones/cities/${cc}/`;
+      if (effectiveState) {
+        endpoint += `${effectiveState.toUpperCase()}/`;
       }
+      // Armar query con prefer=map y cache-busting siempre
+      const params = new URLSearchParams();
+      params.append('prefer', 'map');
+      if (options.q) {
+        params.append('q', options.q);
+      }
+      params.append('_ts', String(Date.now()));
+      const url = `${endpoint}?${params.toString()}`;
 
-      const response = await api.get(endpoint);
+      const response = await api.get(url);
       const result = {
         success: true,
         data: response.data.data || [],
         count: response.data.count || 0,
         countryCode: response.data.country_code,
-        stateCode: response.data.state_code
+        stateCode: response.data.state_code,
+        data_type: response.data.data_type,
+        preferences: response.data.preferences
       };
       
-      // Guardar en cache
-      this._setCache('cities', cacheKey, result);
+  // Guardar en cache
+  this._setCache('cities', cacheKey, result);
       
       return result;
     } catch (error) {
@@ -395,6 +412,23 @@ class ServiceZoneService {
     }
 
     try {
+      // Evitar llamadas innecesarias: para países grandes sin filtros, devolver aviso local
+      if (isLargeCountry && !options.stateCode && !options.cityName && !options.serviceArea && !options.forceLoad) {
+        return {
+          success: false,
+          error: 'Para países grandes, seleccione provincia/estado, ciudad o área de servicio para ver códigos postales',
+          errorType: 'FILTERS_REQUIRED',
+          totalCount: 0,
+          availableFilters: {
+            states: [],
+            cities: [],
+            service_areas: []
+          },
+          suggestion: 'Añada al menos un filtro para cargar códigos postales',
+          isLargeCountry: true,
+          requiresFilters: true
+        };
+      }
       const params = new URLSearchParams();
       if (options.stateCode) {
         params.append('state_code', options.stateCode);
@@ -414,6 +448,14 @@ class ServiceZoneService {
       if (options.forceLoad) {
         params.append('force_all', 'true');
       }
+      // Aumentar el límite cuando hay filtros específicos (ciudad/área) para traer "todos" los códigos
+      // Backend soporta parámetro 'limit' (default 5000). Lo elevamos si hay filtros.
+      const hasSpecificFilters = !!(options.cityName || options.serviceArea || options.stateCode);
+      if (hasSpecificFilters) {
+        // Valores conservadores pero altos; ajustables si se requiere
+        const limit = options.limit || 20000;
+        params.append('limit', String(limit));
+      }
 
       const endpoint = `/service-zones/postal-codes/${countryCode.toUpperCase()}/`;
       const url = params.toString() ? `${endpoint}?${params.toString()}` : endpoint;
@@ -422,10 +464,23 @@ class ServiceZoneService {
       
       // Manejar respuesta exitosa
       if (response.data.success) {
+        // Normalizar paginación desde claves del backend
+        const count = Number(response.data.count || 0);
+        const page = Number(response.data.page || 1);
+        const pageSize = Number(response.data.page_size || options.pageSize || 1000);
+        const totalPages = Number(response.data.total_pages || (pageSize ? Math.ceil(count / pageSize) : 1));
+        const hasNext = page < totalPages;
+
         const result = {
           success: true,
           data: response.data.data || [],
-          pagination: response.data.pagination || { count: response.data.data?.length || 0 },
+          pagination: {
+            count,
+            page,
+            page_size: pageSize,
+            total_pages: totalPages,
+            has_next: hasNext
+          },
           filters: response.data.filters,
           performance: response.data.performance,
           isLargeCountry: isLargeCountry
@@ -643,12 +698,19 @@ class ServiceZoneService {
    */
   async getCities(filters = {}) {
     try {
-      // Solo enviar state si realmente es necesario
-      if (filters.state && filters.state.trim() !== '') {
-        const result = await this.getCitiesByCountryState(filters.country, filters.state);
+      const country = (filters.country || '').toUpperCase();
+      // Para Canadá, ignorar el filtro de estado para obtener la lista completa del país
+    if (country === 'CA') {
+  const result = await this.getCitiesByCountryState(filters.country, null, { q: filters.q || filters.search, bypassCache: filters.bypassCache });
+        return result;
+      }
+
+      // Para otros países, solo enviar state si realmente es necesario
+    if (filters.state && filters.state.trim() !== '') {
+  const result = await this.getCitiesByCountryState(filters.country, filters.state, { q: filters.q || filters.search, bypassCache: filters.bypassCache });
         return result;
       } else {
-        const result = await this.getCitiesByCountryState(filters.country);
+  const result = await this.getCitiesByCountryState(filters.country, null, { q: filters.q || filters.search, bypassCache: filters.bypassCache });
         return result;
       }
     } catch (error) {
@@ -666,11 +728,39 @@ class ServiceZoneService {
    */
   async getPostalCodes(filters = {}) {
     try {
-      const result = await this.getPostalCodesByLocation(filters.country, {
+      // Solicitar con page_size alto para reducir paginación
+      const baseOptions = {
         stateCode: filters.state,
         cityName: filters.city,
-        serviceArea: filters.serviceArea
-      });
+        serviceArea: filters.serviceArea,
+        pageSize: 1000,
+        page: 1
+      };
+
+      let result = await this.getPostalCodesByLocation(filters.country, baseOptions);
+      
+      // Si el dataset es pequeño (<= ~5000) y hay más páginas, traerlas todas y consolidar
+      if (result.success && result.pagination?.has_next && result.pagination?.total_pages && result.pagination.total_pages <= 5) {
+        const allData = [...(result.data || [])];
+        const totalPages = result.pagination.total_pages;
+        for (let p = 2; p <= totalPages; p++) {
+          const pageRes = await this.getPostalCodesByLocation(filters.country, { ...baseOptions, page: p });
+          if (pageRes.success && Array.isArray(pageRes.data)) {
+            allData.push(...pageRes.data);
+          }
+        }
+        // Reemplazar datos y ajustar paginación para reflejar consolidado
+        result = {
+          ...result,
+          data: allData,
+          pagination: {
+            ...result.pagination,
+            count: allData.length,
+            page: 1,
+            has_next: false
+          }
+        };
+      }
       
       // Si hay error de filtros requeridos, devolver el error completo
       if (!result.success && result.errorType === 'FILTERS_REQUIRED') {

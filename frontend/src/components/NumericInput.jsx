@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 
 /**
  * Componente de input numérico optimizado para dispositivos móviles
@@ -37,6 +37,17 @@ const NumericInput = ({
   name,
   ...props
 }) => {
+  // Estado interno para prevenir que el valor del padre sobrescriba mientras el usuario escribe (ej. "0.")
+  const [displayValue, setDisplayValue] = useState('');
+  const isFocusedRef = useRef(false);
+
+  // Inicializar/sincronizar displayValue cuando no está enfocado
+  useEffect(() => {
+    if (!isFocusedRef.current) {
+      setDisplayValue(formatDisplayValue(value));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value]);
   
   /**
    * Formatea el valor para mostrar en el input
@@ -49,8 +60,8 @@ const NumericInput = ({
     // Convertir a string y limpiar
     let strVal = String(val);
     
-    // Si es 0, mostrar string vacío para evitar el problema del 0 inicial
-    if (parseFloat(strVal) === 0) {
+    // NO ocultar valores como 0.5, solo ocultar el 0 exacto
+    if (parseFloat(strVal) === 0 && strVal !== '0.') {
       return '';
     }
     
@@ -84,7 +95,36 @@ const NumericInput = ({
       cleaned = parts[0] + '.' + parts[1].substring(0, decimals);
     }
     
+    // Manejar ceros iniciales de forma inteligente
+    cleaned = handleLeadingZeros(cleaned);
+    
     return cleaned;
+  };
+
+  /**
+   * Maneja ceros iniciales de forma inteligente
+   * Permite: "0.5", "0.", "0" pero evita: "01", "02", etc.
+   */
+  const handleLeadingZeros = (value) => {
+    if (!value) return value;
+    
+    // Si tiene punto decimal, permitir ceros iniciales (0.5, 0.123, etc.)
+    if (value.includes('.')) {
+      return value;
+    }
+    
+    // Si es solo "0", permitir
+    if (value === '0') {
+      return value;
+    }
+    
+    // Si empieza con 0 y tiene más dígitos sin punto decimal, remover ceros iniciales
+    // Esto evita "01", "02", "001" etc. pero permite "0.5"
+    if (value.startsWith('0') && value.length > 1) {
+      return value.replace(/^0+/, '') || '0';
+    }
+    
+    return value;
   };
 
   /**
@@ -97,12 +137,10 @@ const NumericInput = ({
       return true; // Permitir valores vacíos o inválidos para que el usuario pueda escribir
     }
     
-    if (min !== undefined && numVal < min) {
-      return false;
-    }
-    
+    // Durante la escritura, permitir valores fuera del rango
+    // La validación final se hará en onBlur
     if (max !== undefined && numVal > max) {
-      return false;
+      return false; // Solo bloquear valores excesivamente altos
     }
     
     return true;
@@ -116,6 +154,8 @@ const NumericInput = ({
     
     // Limpiar el input
     const cleanedValue = cleanInput(inputValue);
+  // Actualizar display inmediatamente para no depender del valor del padre mientras escribe
+  setDisplayValue(cleanedValue);
     
     // Si está vacío, pasar string vacío
     if (cleanedValue === '') {
@@ -137,6 +177,7 @@ const NumericInput = ({
    */
   const handleBlur = (e) => {
     const currentValue = e.target.value;
+    isFocusedRef.current = false;
     
     if (currentValue === '') {
       return;
@@ -166,6 +207,10 @@ const NumericInput = ({
           }
         };
         onChange(syntheticEvent, finalValue.toString());
+        setDisplayValue(finalValue.toString());
+      } else {
+        // Mantener formato consistente tras blur
+        setDisplayValue(finalValue.toString());
       }
     }
     
@@ -175,12 +220,17 @@ const NumericInput = ({
     }
   };
 
+  const handleFocus = () => {
+    isFocusedRef.current = true;
+  };
+
   // Construir pattern para validación HTML5
   const getPattern = () => {
     if (!allowDecimals) {
       return '[0-9]*';
     }
-    return '[0-9]*[.]?[0-9]*';
+    // Aceptar punto o coma como separador decimal (mejor UX móvil en distintos locales)
+    return '[0-9]*([\\.,][0-9]*)?';
   };
 
   return (
@@ -188,8 +238,9 @@ const NumericInput = ({
       type="text"
       inputMode="decimal"
       pattern={getPattern()}
-      value={formatDisplayValue(value)}
+      value={displayValue}
       onChange={handleChange}
+      onFocus={handleFocus}
       onBlur={handleBlur}
       placeholder={placeholder}
       className={className}

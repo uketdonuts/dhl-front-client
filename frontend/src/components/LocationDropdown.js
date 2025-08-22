@@ -19,6 +19,7 @@ const LocationDropdown = ({
   const [cities, setCities] = useState([]);
   const [serviceAreas, setServiceAreas] = useState([]);
   const [postalCodes, setPostalCodes] = useState([]);
+  const [citySearch, setCitySearch] = useState('');
   
   // Valores seleccionados
   const [selectedCountry, setSelectedCountry] = useState(initialLocation.countryCode || '');
@@ -36,6 +37,8 @@ const LocationDropdown = ({
   
   // Errores
   const [error, setError] = useState('');
+  // Info contextual (p.ej., filtros requeridos para países grandes)
+  const [postalInfo, setPostalInfo] = useState('');
 
   // Cargar países al montar el componente
   useEffect(() => {
@@ -151,9 +154,9 @@ const LocationDropdown = ({
 
   const loadCities = async (countryCode, stateCode = null) => {
     setLoadingCities(true);
-    
     try {
-      const result = await serviceZoneService.getCitiesByCountryState(countryCode, stateCode);
+      // Forzar refresh en el primer intento tras cambios (bypassCache)
+      const result = await serviceZoneService.getCities({ country: countryCode, state: stateCode, q: citySearch, bypassCache: true });
       if (result.success) {
         setCities(result.data);
       } else {
@@ -200,13 +203,20 @@ const LocationDropdown = ({
       });
       if (result.success) {
         setPostalCodes(result.data);
+        setPostalInfo('');
       } else {
-        console.warn('No se pudieron cargar códigos postales:', result.error);
+        // Manejar caso especial de países grandes que requieren filtros
+        if (result.errorType === 'FILTERS_REQUIRED') {
+          setPostalInfo(result.error || 'Seleccione provincia/estado o ciudad para ver códigos postales');
+        } else {
+          console.warn('No se pudieron cargar códigos postales:', result.error);
+        }
         setPostalCodes([]);
       }
     } catch (err) {
       console.error('Error cargando códigos postales:', err);
       setPostalCodes([]);
+      setPostalInfo('');
     } finally {
       setLoadingPostalCodes(false);
     }
@@ -223,6 +233,15 @@ const LocationDropdown = ({
 
   const handleCityChange = (e) => {
     setSelectedCity(e.target.value);
+  };
+
+  const handleCitySearch = (e) => {
+    const val = e.target.value;
+    setCitySearch(val);
+    if (selectedCountry) {
+      // Búsqueda incremental
+      loadCities(selectedCountry, selectedState);
+    }
   };
 
   const handleServiceAreaChange = (e) => {
@@ -265,7 +284,7 @@ const LocationDropdown = ({
       </div>
 
       {/* Dropdown de Estados (solo si hay estados disponibles) */}
-      {states.length > 0 && (
+  {states.length > 0 && selectedCountry !== 'CA' && (
         <div className="mb-3">
           <label className="form-label">Estado/Provincia</label>
           <select
@@ -299,12 +318,27 @@ const LocationDropdown = ({
             <option value="">
               {loadingCities ? 'Cargando ciudades...' : 'Seleccionar ciudad (opcional)'}
             </option>
-            {cities.map((city, index) => (
-              <option key={`${city.city_name}-${index}`} value={city.city_name}>
-                {city.city_name}
-              </option>
-            ))}
+            {/* Input simple de búsqueda */}
+            {/* Nota: en select HTML no se puede insertar input; esto es placeholder visual. Implementar búsqueda externa si se requiere */}
+            {cities.map((city, index) => {
+              const value = city.code || city.city_name || city.name || city.display_name;
+              const label = city.display_name || city.name || city.city_name || value;
+              return (
+                <option key={`${value}-${index}`} value={value}>
+                  {label}
+                </option>
+              );
+            })}
           </select>
+          {/* Campo de búsqueda separado para filtrar del servidor */}
+          <input
+            type="text"
+            className="form-control mt-2"
+            placeholder="Buscar ciudad..."
+            value={citySearch}
+            onChange={handleCitySearch}
+            disabled={disabled || !selectedCountry}
+          />
         </div>
       )}
 
@@ -331,27 +365,33 @@ const LocationDropdown = ({
       )}
 
       {/* Dropdown de Códigos Postales */}
-      {selectedCountry && postalCodes.length > 0 && (
+      {selectedCountry && (
         <div className="mb-3">
           <label className="form-label">Código Postal</label>
-          <select
-            className="form-select"
-            value={selectedPostalCode}
-            onChange={handlePostalCodeChange}
-            disabled={disabled || loadingPostalCodes || !selectedCountry}
-          >
-            <option value="">
-              {loadingPostalCodes ? 'Cargando códigos postales...' : 'Seleccionar código postal (opcional)'}
-            </option>
-            {postalCodes.map((postal, index) => (
-              <option key={`${postal.postal_code_from}-${postal.postal_code_to}-${index}`} value={`${postal.postal_code_from}-${postal.postal_code_to}`}>
-                {postal.postal_code_from === postal.postal_code_to 
-                  ? postal.postal_code_from 
-                  : `${postal.postal_code_from} - ${postal.postal_code_to}`}
-                {postal.service_area && ` (${postal.service_area})`}
+          {postalInfo && postalCodes.length === 0 ? (
+            <div className="alert alert-info" role="alert">
+              {postalInfo}
+            </div>
+          ) : (
+            <select
+              className="form-select"
+              value={selectedPostalCode}
+              onChange={handlePostalCodeChange}
+              disabled={disabled || loadingPostalCodes || !selectedCountry}
+            >
+              <option value="">
+                {loadingPostalCodes ? 'Cargando códigos postales...' : 'Seleccionar código postal (opcional)'}
               </option>
-            ))}
-          </select>
+              {postalCodes.map((postal, index) => (
+                <option key={`${postal.postal_code_from}-${postal.postal_code_to}-${index}`} value={`${postal.postal_code_from}-${postal.postal_code_to}`}>
+                  {postal.postal_code_from === postal.postal_code_to 
+                    ? postal.postal_code_from 
+                    : `${postal.postal_code_from} - ${postal.postal_code_to}`}
+                  {postal.service_area && ` (${postal.service_area})`}
+                </option>
+              ))}
+            </select>
+          )}
         </div>
       )}
 

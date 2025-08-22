@@ -5,7 +5,7 @@ import os
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 from django.db.models import Count
-from dhl_api.models import ServiceZone
+from dhl_api.models import ServiceZone, CountryISO
 
 
 class Command(BaseCommand):
@@ -74,7 +74,9 @@ class Command(BaseCommand):
                             continue
                         
                         country_code = parts[0].strip()
-                        country_name = parts[1].strip()
+                        # Normalizar nombre de país: preferir CountryISO si disponible
+                        raw_country_name = parts[1].strip()
+                        country_name = CountryISO.resolve_name(country_code, fallback=raw_country_name)
                         state_code = parts[2].strip() if parts[2] else ''
                         state_name = parts[3].strip() if parts[3] else ''
                         city_name = parts[4].strip() if parts[4] else ''
