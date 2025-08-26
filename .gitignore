@@ -97,4 +97,6 @@ dhl_api/ISO_Country_Codes_fullset_*.csv
 
 # Base de datos local
 db.sqlite3
-*.sqlite3
+*.sqlite3dhl_api/ESD.TXT:Zone.Identifier
+dhl_api/ISO_Country_Codes_fullset_20250813010003.csv:Zone.Identifier
+dhl_api/Postal_Locations_fullset_20250811010020.csv:Zone.Identifier

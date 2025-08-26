@@ -3745,6 +3745,79 @@ def get_service_areas_by_location(request, country_code):
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
+def get_city_service_area_mapping(country_code, city_name):
+    """
+    Obtiene el área de servicio correcta para una ciudad específica basado en:
+    1. Análisis de densidad y continuidad de códigos postales
+    2. El área de servicio que tenga más códigos postales válidos (no vacíos)
+    3. Si hay empate, el que tenga códigos postales con patrones más consistentes
+    """
+    from django.db.models import Count, Min, Max, Q
+    from .models import ServiceAreaCityMap
+    
+    # Análisis avanzado por densidad de códigos postales
+    areas_analysis = ServiceAreaCityMap.objects.filter(
+        country_code=country_code.upper(),
+        city_name__iexact=city_name
+    ).exclude(
+        Q(postal_code_from='') | Q(postal_code_to='') |
+        Q(postal_code_from__isnull=True) | Q(postal_code_to__isnull=True)
+    ).values('service_area').annotate(
+        code_count=Count('postal_code_from', distinct=True),
+        min_code=Min('postal_code_from'),
+        max_code=Max('postal_code_from')
+    )
+    
+    if not areas_analysis.exists():
+        # Si no hay códigos postales, usar el área más común sin filtrar
+        fallback_mapping = ServiceAreaCityMap.objects.filter(
+            country_code=country_code.upper(),
+            city_name__iexact=city_name
+        ).values('service_area').annotate(
+            count=Count('service_area')
+        ).order_by('-count').first()
+        
+        return fallback_mapping['service_area'] if fallback_mapping else None
+    
+    # Calcular score de calidad para cada service_area
+    best_area = None
+    best_score = 0
+    
+    for area in areas_analysis:
+        service_area = area['service_area']
+        code_count = area['code_count']
+        min_code = area['min_code']
+        max_code = area['max_code']
+        
+        # Score basado en cantidad de códigos postales
+        score = code_count
+        
+        # Bonus para áreas con más de 10 códigos (consideradas primarias)
+        if code_count >= 10:
+            score += 50
+        
+        # Bonus por continuidad de códigos postales (rango compacto)
+        if min_code and max_code and min_code.isdigit() and max_code.isdigit():
+            try:
+                range_size = int(max_code) - int(min_code) + 1
+                density = code_count / range_size if range_size > 0 else 0
+                if density > 0.5:  # Más del 50% del rango está cubierto
+                    score += 30
+            except (ValueError, TypeError):
+                pass
+        
+        # Bonus por códigos con patrones consistentes (mismo prefijo)
+        if min_code and max_code and len(min_code) == len(max_code):
+            if len(min_code) >= 3 and min_code[:3] == max_code[:3]:
+                score += 20  # Mismo prefijo de 3 dígitos
+        
+        if score > best_score:
+            best_score = score
+            best_area = service_area
+    
+    return best_area if best_area else areas_analysis.first()['service_area']
+
+
 @api_view(['GET'])
 @permission_classes([AllowAny])
 @cache_page(60 * 15)  # Cache por 15 minutos
@@ -3752,7 +3825,7 @@ def get_postal_codes_by_location(request, country_code):
     try:
         from .models import ServiceAreaCityMap, ServiceZone
         from .serializers import PostalCodeSerializer
-        from django.db.models import Q
+        from django.db.models import Q, Count
 
         state_code = request.GET.get('state_code')
         city_name = request.GET.get('city_name')
@@ -3768,8 +3841,21 @@ def get_postal_codes_by_location(request, country_code):
         qs = ServiceAreaCityMap.objects.filter(country_code=cc)
         if sc and cc != 'CA':
             qs = qs.filter(state_code=sc)
+        
+        # Filtrado mejorado por ciudad con validación de área de servicio
         if city_name:
-            qs = qs.filter(Q(city_name__iexact=city_name) | Q(display_name__icontains=city_name))
+            # Buscar el área de servicio correcta para esta ciudad
+            correct_service_area = get_city_service_area_mapping(cc, city_name)
+            if correct_service_area:
+                # Filtrar por ciudad Y área de servicio correcta
+                qs = qs.filter(
+                    Q(city_name__iexact=city_name) | Q(display_name__icontains=city_name),
+                    service_area=correct_service_area
+                )
+            else:
+                # Si no hay mapeo claro, usar filtro tradicional pero con advertencia
+                qs = qs.filter(Q(city_name__iexact=city_name) | Q(display_name__icontains=city_name))
+        
         if sa:
             qs = qs.filter(service_area=sa)
         qs = qs.exclude(postal_code_from='').exclude(postal_code_to='')
@@ -3794,7 +3880,12 @@ def get_postal_codes_by_location(request, country_code):
 
         # Fallback/append: complementar con rangos desde ServiceZone (ESD)
         try:
-            esd_qs = ServiceZone.get_postal_codes_by_location(cc, sc, city_name, sa)
+            # Para ESD, aplicar el mismo filtro de área de servicio si se especificó ciudad
+            if city_name and not sa:
+                correct_service_area = get_city_service_area_mapping(cc, city_name)
+                esd_qs = ServiceZone.get_postal_codes_by_location(cc, sc, city_name, correct_service_area)
+            else:
+                esd_qs = ServiceZone.get_postal_codes_by_location(cc, sc, city_name, sa)
             # Convertir a lista de dicts similares
             esd_list = list(esd_qs)
         except Exception:
@@ -3803,6 +3894,12 @@ def get_postal_codes_by_location(request, country_code):
         # Unificar y deduplicar por (from,to,service_area)
         seen = set()
         unified = []
+        
+        # Obtener el área de servicio correcta para validación adicional
+        city_correct_area = None
+        if city_name:
+            city_correct_area = get_city_service_area_mapping(cc, city_name)
+        
         for item in data_all + esd_list:
             f = (item.get('postal_code_from') or '').strip()
             t = (item.get('postal_code_to') or '').strip()
@@ -3812,6 +3909,11 @@ def get_postal_codes_by_location(request, country_code):
                 continue
             if key in seen:
                 continue
+            
+            # Validación adicional: si se especificó ciudad, solo incluir códigos del área correcta
+            if city_name and city_correct_area and s != city_correct_area:
+                continue
+            
             seen.add(key)
             unified.append({'postal_code_from': f, 'postal_code_to': t, 'service_area': s})
 
@@ -3826,7 +3928,18 @@ def get_postal_codes_by_location(request, country_code):
         data = unified[start:end]
         serializer = PostalCodeSerializer(data, many=True)
 
-        return Response({
+        # Debug info si se solicita
+        debug_info = {}
+        if request.GET.get('debug') == '1' and city_name:
+            correct_area = get_city_service_area_mapping(cc, city_name)
+            debug_info = {
+                'detected_service_area': correct_area,
+                'filter_applied': bool(correct_area),
+                'total_before_filter': len(data_all + esd_list),
+                'total_after_filter': len(unified)
+            }
+
+        response_data = {
             'success': True,
             'message': 'Códigos postales obtenidos exitosamente',
             'data': serializer.data,
@@ -3841,7 +3954,12 @@ def get_postal_codes_by_location(request, country_code):
                 'service_area': sa
             },
             'source': 'Map+ESD'
-        }, status=status.HTTP_200_OK)
+        }
+        
+        if debug_info:
+            response_data['debug'] = debug_info
+            
+        return Response(response_data, status=status.HTTP_200_OK)
 
     except ValueError as e:
         logger.error(f"Error de parámetros obteniendo códigos postales: {str(e)}")
@@ -4162,3 +4280,148 @@ def map_stats_by_country(request, country_code):
     except Exception as e:
         logger.error(f"Error en map_stats_by_country: {e}")
         return Response({'success': False, 'message': 'Error', 'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def test_city_service_area_mapping(request, country_code, city_name):
+    """
+    Endpoint de prueba para verificar el mapeo de ciudad a área de servicio
+    """
+    try:
+        from django.db.models import Count, Q
+        from .models import ServiceAreaCityMap
+        
+        # Mostrar todas las áreas de servicio para esta ciudad
+        all_mappings = ServiceAreaCityMap.objects.filter(
+            country_code=country_code.upper(),
+            city_name__iexact=city_name
+        ).values('service_area').annotate(
+            total_count=Count('service_area'),
+            valid_postal_count=Count('postal_code_from', filter=Q(
+                postal_code_from__isnull=False, 
+                postal_code_to__isnull=False
+            ) & ~Q(postal_code_from='') & ~Q(postal_code_to=''))
+        ).order_by('-valid_postal_count', '-total_count')
+        
+        # Usar la función de mapeo
+        correct_area = get_city_service_area_mapping(country_code, city_name)
+        
+        return Response({
+            'success': True,
+            'city': city_name,
+            'country': country_code.upper(),
+            'correct_service_area': correct_area,
+            'all_mappings': list(all_mappings),
+            'message': f'Área de servicio correcta para {city_name}: {correct_area}'
+        }, status=status.HTTP_200_OK)
+        
+    except Exception as e:
+        return Response({
+            'success': False,
+            'error': str(e)
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def debug_city_analysis(request, country_code, city_name):
+    """
+    Endpoint de debug para analizar en detalle cómo se escoge el service_area para una ciudad
+    """
+    try:
+        from django.db.models import Count, Min, Max, Q
+        from .models import ServiceAreaCityMap
+        
+        # Análisis detallado por service_area
+        areas_analysis = ServiceAreaCityMap.objects.filter(
+            country_code=country_code.upper(),
+            city_name__iexact=city_name
+        ).exclude(
+            Q(postal_code_from='') | Q(postal_code_to='') |
+            Q(postal_code_from__isnull=True) | Q(postal_code_to__isnull=True)
+        ).values('service_area').annotate(
+            code_count=Count('postal_code_from', distinct=True),
+            min_code=Min('postal_code_from'),
+            max_code=Max('postal_code_from')
+        )
+        
+        debug_info = []
+        best_area = None
+        best_score = 0
+        
+        for area in areas_analysis:
+            service_area = area['service_area']
+            code_count = area['code_count']
+            min_code = area['min_code']
+            max_code = area['max_code']
+            
+            # Calcular score (misma lógica que la función principal)
+            score = code_count
+            score_breakdown = {'base_count': code_count}
+            
+            if code_count >= 10:
+                score += 50
+                score_breakdown['primary_bonus'] = 50
+            
+            if min_code and max_code and min_code.isdigit() and max_code.isdigit():
+                try:
+                    range_size = int(max_code) - int(min_code) + 1
+                    density = code_count / range_size if range_size > 0 else 0
+                    if density > 0.5:
+                        score += 30
+                        score_breakdown['continuity_bonus'] = 30
+                    score_breakdown['density'] = density
+                    score_breakdown['range_size'] = range_size
+                except (ValueError, TypeError):
+                    pass
+            
+            if min_code and max_code and len(min_code) == len(max_code):
+                if len(min_code) >= 3 and min_code[:3] == max_code[:3]:
+                    score += 20
+                    score_breakdown['pattern_bonus'] = 20
+            
+            debug_info.append({
+                'service_area': service_area,
+                'code_count': code_count,
+                'min_code': min_code,
+                'max_code': max_code,
+                'total_score': score,
+                'score_breakdown': score_breakdown,
+                'is_best': False
+            })
+            
+            if score > best_score:
+                best_score = score
+                best_area = service_area
+        
+        # Marcar el mejor
+        for info in debug_info:
+            if info['service_area'] == best_area:
+                info['is_best'] = True
+        
+        # Obtener algunos códigos de ejemplo para cada área
+        for info in debug_info:
+            examples = ServiceAreaCityMap.objects.filter(
+                country_code=country_code.upper(),
+                city_name__iexact=city_name,
+                service_area=info['service_area']
+            ).exclude(
+                Q(postal_code_from='') | Q(postal_code_to='')
+            ).values_list('postal_code_from', 'postal_code_to')[:5]
+            info['postal_examples'] = list(examples)
+        
+        return Response({
+            'success': True,
+            'city': city_name,
+            'country': country_code.upper(),
+            'selected_service_area': best_area,
+            'analysis': debug_info,
+            'message': f'Análisis detallado para {city_name}. Área seleccionada: {best_area}'
+        }, status=status.HTTP_200_OK)
+        
+    except Exception as e:
+        return Response({
+            'success': False,
+            'error': str(e)
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
