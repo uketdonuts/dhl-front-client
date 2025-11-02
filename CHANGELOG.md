@@ -1,6 +1,34 @@
 # ### Fixed
 ## [Unreleased]
 
+### Added
+- Variables de entorno para DHL en `.env`: `DHL_USERNAME`, `DHL_PASSWORD`, `DHL_BASE_URL` para habilitar autenticación de la API REST (necesarias para crear Pickups exitosamente).
+
+### Fixed
+- SmartLocationDropdown (Pickup): estabilidad visual al seleccionar código postal. Ahora el placeholder muestra inmediatamente el rango seleccionado y no se “resetea” tras el onChange; se usa estado local temporal para evitar parpadeos mientras el padre actualiza.
+- **📍 Dropdown de Ubicaciones en Recogida**: Corregido el componente SmartLocationDropdown en el módulo de Recogida para funcionar como el de cotizaciones. Ahora usa un solo dropdown integrado que maneja país, estado y ciudad automáticamente, en lugar de dropdowns separados.
+- **📋 Estructura de Datos Pickup**: Corregido el formato de datos enviados al backend en el módulo de Recogida para cumplir con la estructura esperada por la API DHL. Ahora transforma correctamente los datos del formulario a los campos requeridos: `plannedPickupDateAndTime`, `shipper`, `receiver`, `bookingRequestor`, y `pickupDetails`.
+- **🎯 Selección Visual de Ubicaciones**: Corregido el problema donde no se mostraba visualmente la ubicación seleccionada en el dropdown. Ahora guarda y muestra tanto códigos de país/estado/ciudad como sus nombres completos.
+- **⚠️ Validación de Cuenta DHL**: Agregado indicador visual claro que muestra si hay una cuenta DHL seleccionada, con detalles de la cuenta y mensaje de error específico si no está seleccionada.
+
+### Added
+- **🚚📋 NUEVO MÓDULO: Recogida DHL (Pickup Booking)**:
+  - **Nueva pestaña "Recogida"** agregada al menú principal (desktop y móvil)
+  - **Interfaz completa** para programar recogidas con DHL Express
+  - **Campos incluidos**:
+    - Información de recogida: fecha, hora, ventana de tiempo, instrucciones especiales
+    - Datos del solicitante: nombre, empresa, teléfono, email, dirección completa
+    - Información de paquetes: cantidad, peso total, valor declarado, moneda
+  - **SmartLocationDropdown integrado** para selección de ubicaciones completas
+  - **Validaciones frontend**: fecha mínima (mañana), campos obligatorios
+  - **Conectado al backend** `/api/dhl/pickup/` endpoint
+  - **Respuesta completa**: muestra número de confirmación y costos asociados
+  - **Formulario responsive**: diseño adaptado para desktop y móvil
+  - **Información útil**: consejos y requisitos para recogidas DHL
+  - **Cuenta DHL requerida**: integrado con sistema de cuentas existente
+  - **Traducido al español**: todas las etiquetas y mensajes en español
+  - **Diseño consistente**: sigue el mismo patrón visual que otras interfaces del dashboard
+
 ### Fixed
 - Rate (cotizador): normalización automática de `customerDetails.*.countryCode` a ISO-3166-1 alpha-2 (2 letras) antes de enviar el request a DHL para evitar errores 422 por longitudes > 2. No se cambiaron llaves ni estructura del payload; solo se corrigen los valores.
 
@@ -18,6 +46,24 @@
   - **Sincronización robusta**: useEffect mejorado en RateTabImproved con timeout de 200ms y logs detallados
   - **Force Update Flag**: Sistema de banderas para forzar actualización de dropdowns cuando sea necesario
   - **Debugging mejorado**: Logs informativos con objetos completos para monitorear transferencia de datos
+
+- **📦🚛 NUEVO ENDPOINT: Pickup Booking con DHL Express API**:
+  - **Método**: `POST /dhl/pickup/`
+  - **Funcionalidad**: Crear solicitudes de recogida (pickup booking) con DHL
+  - **Autenticación**: JWT Token requerido
+  - **Payload completo**: Soporta estructura completa de DHL Express API
+  - **Campos principales**:
+    - `plannedPickupDateAndTime`: Fecha y hora programada
+    - `closeTime`: Hora límite de recogida
+    - `location` y `locationType`: Ubicación del pickup
+    - `customerDetails`: Información completa de shipper, receiver, booking requestor y pickup details
+    - `shipmentDetails`: Detalles del envío a recoger
+    - `specialInstructions`: Instrucciones especiales
+  - **Respuesta**: Retorna `dispatchConfirmationNumber` y datos completos del pickup
+  - **Logging**: Registra actividades de usuario y errores del sistema
+  - **Validación**: Campos requeridos validados antes del envío
+  - **Método de servicio**: `DHLService.create_pickup()` implementado
+  - **Parsing específico**: Respuesta parseada específicamente para pickups
 - **🔧 Backend PostgreSQL**: Dependencia `psycopg2-binary==2.9.7` habilitada para desarrollo local
 - Tracking: expuestos nuevos campos en la respuesta de tracking para auditoría de pesos:
   - `weights_summary` (shipment_total, sum_pieces, max_piece, unit, highest_for_quote)

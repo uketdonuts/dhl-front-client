@@ -508,22 +508,26 @@ class DHLService:
             }
             
             # Estructura de datos para API REST de DHL
-            # Calcular fecha de envío (próximo día laboral para asegurar disponibilidad)
+            # Calcular fecha de envío (con mínimo 2 días laborales de anticipación para asegurar disponibilidad)
             from datetime import datetime, timedelta
-            
-            # Encontrar el próximo día laboral (lunes a viernes)
+
+            # Encontrar el próximo día laboral con al menos 3 días laborales de anticipación
             current_date = datetime.now()
             days_ahead = 1
-            
-            # Si es viernes, sábado o domingo, ir al próximo lunes
-            while True:
+            business_days_found = 0
+            business_days_required = 5  # Mínimo 5 días laborales de anticipación (DHL cambió políticas)
+
+            # Buscar N días laborales en el futuro
+            while business_days_found < business_days_required:
                 next_date = current_date + timedelta(days=days_ahead)
                 if next_date.weekday() < 5:  # 0=Monday, 6=Sunday (0-4 son días laborales)
-                    break
+                    business_days_found += 1
+                    if business_days_found >= business_days_required:
+                        break
                 days_ahead += 1
-            
+
             shipping_date = next_date.strftime('%Y-%m-%dT13:00:00GMT+00:00')
-            logger.info(f"Using shipping date: {shipping_date} (weekday: {next_date.strftime('%A')}) - weekday number: {next_date.weekday()}")
+            logger.info(f"Using shipping date: {shipping_date} (weekday: {next_date.strftime('%A')}) - weekday number: {next_date.weekday()}, business days ahead: {business_days_found}")
             
             request_data = {
                 "customerDetails": {
@@ -986,6 +990,409 @@ class DHLService:
                 "error_type": "unexpected_error"
             }
 
+    def get_pickup(self, pickup_id):
+        """Obtiene información de una recogida programada usando la API REST de DHL"""
+        try:
+            logger.info(f"Starting pickup request for {pickup_id}")
+            logger.info(f"Environment: {self.environment}")
+            
+            # Validar formato del ID de recogida
+            if not pickup_id or not str(pickup_id).strip():
+                logger.error("Empty pickup ID")
+                return {"success": False, "message": "ID de recogida requerido"}
+            
+            # Limpiar el ID de recogida
+            pickup_id = str(pickup_id).strip()
+            
+            # Formatear la URL con el ID de recogida
+            endpoint_url = self.endpoints["pickup"].format(pickup_id)
+            logger.info(f"Making pickup request to: {endpoint_url}")
+            
+            # Headers para API REST
+            headers = self._get_rest_headers()
+            
+            # Parámetros de query para API REST
+            params = {
+                "pickupView": "all-details"  # Valor válido según API 
+            }
+            
+            logger.info(f"Using params: {params}")
+            
+            logger.debug(f"Request Headers: {headers}")
+            logger.debug(f"Request Params: {params}")
+            
+            try:
+                response = requests.get(
+                    endpoint_url,
+                    headers=headers,
+                    params=params,
+                    verify=False,
+                    timeout=30
+                )
+                
+                logger.info(f"Response Status: {response.status_code}")
+                logger.debug(f"Response Headers: {dict(response.headers)}")
+                
+                # Para debugging, loggear respuesta completa si es exitosa
+                if response.status_code in [200, 201]:
+                    logger.info(f"Pickup response (full): {response.text}")
+                else:
+                    logger.debug(f"Pickup response: {response.text[:500]}")
+                
+                # Parsear la respuesta REST
+                result = self._parse_rest_response(response, "Pickup")
+                logger.info(f"Parse Result: {result}")
+                return result
+                    
+            except requests.exceptions.Timeout:
+                logger.error(f"Timeout error for pickup {pickup_id}")
+                return {
+                    "success": False,
+                    "message": "Timeout al conectar con DHL. Intenta más tarde.",
+                    "error_code": "TIMEOUT_ERROR",
+                    "suggestion": "Reintentar en unos minutos"
+                }
+            except requests.exceptions.ConnectionError:
+                logger.error(f"Connection error for pickup {pickup_id}")
+                return {
+                    "success": False,
+                    "message": "Ha ocurrido un error",
+                    "error_code": "CONNECTION_ERROR",
+                    "suggestion": "Verificar conexión a internet y reintentar"
+                }
+            except requests.exceptions.RequestException as e:
+                logger.error(f"Request error for pickup {pickup_id}: {str(e)}")
+                return {
+                    "success": False,
+                    "message": "Ha ocurrido un error",
+                    "error_code": "REQUEST_ERROR",
+                    "suggestion": "Reintentar más tarde"
+                }
+            
+        except Exception as e:
+            logger.exception(f"Error in get_pickup for {pickup_id}")
+            return {
+                "success": False, 
+                "message": "Ha ocurrido un error",
+                "error_code": "GENERAL_ERROR",
+                "suggestion": "Contactar soporte técnico"
+            }
+
+    def create_pickup(self, pickup_data):
+        """
+        Crea una solicitud de recogida (pickup booking) usando la API REST de DHL
+        
+        Args:
+            pickup_data (dict): Datos de la recogida con la siguiente estructura:
+            {
+                'plannedPickupDateAndTime': '2019-08-04T14:00:31GMT+01:00',
+                'closeTime': '18:00',
+                'location': 'reception',
+                'locationType': 'residence',
+                'specialInstructions': [{'value': 'please ring door bell', 'typeCode': 'TBD'}],
+                'remark': 'string',
+                'account_number': '123456789',
+                'shipper': {
+                    'postalCode': '14800',
+                    'cityName': 'Prague',
+                    'countryCode': 'CZ',
+                    'provinceCode': 'CZ',
+                    'addressLine1': 'V Parku 2308/10',
+                    'addressLine2': 'addres2',
+                    'addressLine3': 'addres3',
+                    'countyName': 'Central Bohemia',
+                    'contactInformation': {
+                        'email': 'that@before.de',
+                        'phone': '+1123456789',
+                        'mobilePhone': '+60112345678',
+                        'companyName': 'Company Name',
+                        'fullName': 'John Brew'
+                    }
+                },
+                'receiver': {
+                    'postalCode': '14800',
+                    'cityName': 'Prague',
+                    'countryCode': 'CZ',
+                    'provinceCode': 'CZ',
+                    'addressLine1': 'V Parku 2308/10',
+                    'addressLine2': 'addres2',
+                    'addressLine3': 'addres3',
+                    'countyName': 'Central Bohemia',
+                    'contactInformation': {
+                        'email': 'that@before.de',
+                        'phone': '+1123456789',
+                        'mobilePhone': '+60112345678',
+                        'companyName': 'Company Name',
+                        'fullName': 'John Brew'
+                    }
+                },
+                'bookingRequestor': {
+                    'postalCode': '14800',
+                    'cityName': 'Prague',
+                    'countryCode': 'CZ',
+                    'provinceCode': 'CZ',
+                    'addressLine1': 'V Parku 2308/10',
+                    'addressLine2': 'addres2',
+                    'addressLine3': 'addres3',
+                    'countyName': 'Central Bohemia',
+                    'contactInformation': {
+                        'email': 'that@before.de',
+                        'phone': '+1123456789',
+                        'mobilePhone': '+60112345678',
+                        'companyName': 'Company Name',
+                        'fullName': 'John Brew'
+                    }
+                },
+                'pickupDetails': {
+                    'postalCode': '14800',
+                    'cityName': 'Prague',
+                    'countryCode': 'CZ',
+                    'provinceCode': 'CZ',
+                    'addressLine1': 'V Parku 2308/10',
+                    'addressLine2': 'addres2',
+                    'addressLine3': 'addres3',
+                    'countyName': 'Central Bohemia',
+                    'contactInformation': {
+                        'email': 'that@before.de',
+                        'phone': '+1123456789',
+                        'mobilePhone': '+60112345678',
+                        'companyName': 'Company Name',
+                        'fullName': 'John Brew'
+                    }
+                },
+                'shipmentDetails': [
+                    {
+                        'productCode': 'P',
+                        'localProductCode': 'P',
+                        'accounts': [{'typeCode': 'shipper', 'number': '123456789'}],
+                        'valueAddedServices': [
+                            {
+                                'serviceCode': 'II',
+                                'localServiceCode': 'II',
+                                'value': 100,
+                                'currency': 'GBP',
+                                'method': 'cash'
+                            }
+                        ],
+                        'isCustomsDeclarable': True,
+                        'declaredValue': 150,
+                        'declaredValueCurrency': 'CZK',
+                        'unitOfMeasurement': 'metric',
+                        'shipmentTrackingNumber': '123456790',
+                        'packages': [
+                            {
+                                'typeCode': '3BX',
+                                'weight': 10.5,
+                                'dimensions': {
+                                    'length': 25,
+                                    'width': 35,
+                                    'height': 15
+                                }
+                            }
+                        ]
+                    }
+                ]
+            }
+            
+        Returns:
+            dict: Respuesta de la API de DHL con información de la recogida creada
+        """
+        try:
+            logger.info("Creating pickup booking with DHL API")
+            
+            # Extraer datos del formulario
+            planned_pickup_datetime = pickup_data.get('plannedPickupDateAndTime', '')
+            close_time = pickup_data.get('closeTime', '18:00')
+            location = pickup_data.get('location', 'reception')
+            location_type = pickup_data.get('locationType', 'business')
+            special_instructions = pickup_data.get('specialInstructions', [])
+            remark = pickup_data.get('remark', '')
+            account_number = pickup_data.get('account_number', '')
+            
+            # Información de direcciones
+            shipper = pickup_data.get('shipper', {})
+            receiver = pickup_data.get('receiver', {})
+            booking_requestor = pickup_data.get('bookingRequestor', {})
+            pickup_details = pickup_data.get('pickupDetails', {})
+            shipment_details = pickup_data.get('shipmentDetails', [])
+            
+            # Preparar el payload para la API REST de DHL
+            pickup_payload = {
+                "plannedPickupDateAndTime": planned_pickup_datetime,
+                "closeTime": close_time,
+                "location": location,
+                "locationType": location_type,
+                "accounts": [
+                    {
+                        "typeCode": "shipper",
+                        "number": account_number
+                    }
+                ],
+                "specialInstructions": special_instructions,
+                "remark": remark,
+                "customerDetails": {
+                    "shipperDetails": {
+                        "postalAddress": {
+                            "postalCode": shipper.get('postalCode', '0000'),
+                            "cityName": self._clean_text(shipper.get('cityName', 'Ciudad')),
+                            "countryCode": shipper.get('countryCode', 'PA'),
+                            "provinceCode": shipper.get('provinceCode', 'PA') or 'PA',  # Mínimo 2 caracteres
+                            "addressLine1": self._clean_text(shipper.get('addressLine1', 'Dirección')),
+                            "addressLine2": self._clean_text(shipper.get('addressLine2', '')),
+                            "addressLine3": self._clean_text(shipper.get('addressLine3', '')) or 'Edificio Principal',  # Obligatorio
+                            "countyName": self._clean_text(shipper.get('countyName', '')) or 'Distrito Central'  # Obligatorio
+                        },
+                        "contactInformation": {
+                            "email": shipper.get('contactInformation', {}).get('email', 'shipper@example.com'),
+                            "phone": self._clean_phone(shipper.get('contactInformation', {}).get('phone', '50712345678')),
+                            "mobilePhone": self._clean_phone(shipper.get('contactInformation', {}).get('mobilePhone', '')) or self._clean_phone(shipper.get('contactInformation', {}).get('phone', '50712345678')),  # Usar phone si no hay mobile
+                            "companyName": self._clean_text(shipper.get('contactInformation', {}).get('companyName', 'Empresa')),
+                            "fullName": self._clean_text(shipper.get('contactInformation', {}).get('fullName', 'Nombre'))
+                        }
+                    },
+                    "receiverDetails": {
+                        "postalAddress": {
+                            "postalCode": receiver.get('postalCode', '0000'),
+                            "cityName": self._clean_text(receiver.get('cityName', 'Ciudad')),
+                            "countryCode": receiver.get('countryCode', 'PA'),
+                            "provinceCode": receiver.get('provinceCode', 'PA') or 'PA',  # Mínimo 2 caracteres
+                            "addressLine1": self._clean_text(receiver.get('addressLine1', 'Dirección')),
+                            "addressLine2": self._clean_text(receiver.get('addressLine2', '')),
+                            "addressLine3": self._clean_text(receiver.get('addressLine3', '')) or 'Edificio Principal',  # Obligatorio
+                            "countyName": self._clean_text(receiver.get('countyName', '')) or 'Distrito Central'  # Obligatorio
+                        },
+                        "contactInformation": {
+                            "email": receiver.get('contactInformation', {}).get('email', 'receiver@example.com'),
+                            "phone": self._clean_phone(receiver.get('contactInformation', {}).get('phone', '12345678901')),
+                            "mobilePhone": self._clean_phone(receiver.get('contactInformation', {}).get('mobilePhone', '')) or self._clean_phone(receiver.get('contactInformation', {}).get('phone', '12345678901')),  # Usar phone si no hay mobile
+                            "companyName": self._clean_text(receiver.get('contactInformation', {}).get('companyName', 'Empresa')),
+                            "fullName": self._clean_text(receiver.get('contactInformation', {}).get('fullName', 'Nombre'))
+                        }
+                    },
+                    "bookingRequestorDetails": {
+                        "postalAddress": {
+                            "postalCode": booking_requestor.get('postalCode', '0000'),
+                            "cityName": self._clean_text(booking_requestor.get('cityName', 'Ciudad')),
+                            "countryCode": booking_requestor.get('countryCode', 'PA'),
+                            "provinceCode": booking_requestor.get('provinceCode', 'PA') or 'PA',  # Mínimo 2 caracteres
+                            "addressLine1": self._clean_text(booking_requestor.get('addressLine1', 'Dirección')),
+                            "addressLine2": self._clean_text(booking_requestor.get('addressLine2', '')),
+                            "addressLine3": self._clean_text(booking_requestor.get('addressLine3', '')) or 'Edificio Principal',  # Obligatorio
+                            "countyName": self._clean_text(booking_requestor.get('countyName', '')) or 'Distrito Central'  # Obligatorio
+                        },
+                        "contactInformation": {
+                            "email": booking_requestor.get('contactInformation', {}).get('email', 'booking@example.com'),
+                            "phone": self._clean_phone(booking_requestor.get('contactInformation', {}).get('phone', '50712345678')),
+                            "mobilePhone": self._clean_phone(booking_requestor.get('contactInformation', {}).get('mobilePhone', '')) or self._clean_phone(booking_requestor.get('contactInformation', {}).get('phone', '50712345678')),  # Usar phone si no hay mobile
+                            "companyName": self._clean_text(booking_requestor.get('contactInformation', {}).get('companyName', 'Empresa')),
+                            "fullName": self._clean_text(booking_requestor.get('contactInformation', {}).get('fullName', 'Nombre'))
+                        }
+                    },
+                    "pickupDetails": {
+                        "postalAddress": {
+                            "postalCode": pickup_details.get('postalCode', '0000'),
+                            "cityName": self._clean_text(pickup_details.get('cityName', 'Ciudad')),
+                            "countryCode": pickup_details.get('countryCode', 'PA'),
+                            "provinceCode": pickup_details.get('provinceCode', 'PA') or 'PA',  # Mínimo 2 caracteres
+                            "addressLine1": self._clean_text(pickup_details.get('addressLine1', 'Dirección')),
+                            "addressLine2": self._clean_text(pickup_details.get('addressLine2', '')),
+                            "addressLine3": self._clean_text(pickup_details.get('addressLine3', '')) or 'Edificio Principal',  # Obligatorio
+                            "countyName": self._clean_text(pickup_details.get('countyName', '')) or 'Distrito Central'  # Obligatorio
+                        },
+                        "contactInformation": {
+                            "email": pickup_details.get('contactInformation', {}).get('email', 'pickup@example.com'),
+                            "phone": self._clean_phone(pickup_details.get('contactInformation', {}).get('phone', '50712345678')),
+                            "mobilePhone": self._clean_phone(pickup_details.get('contactInformation', {}).get('mobilePhone', '')) or self._clean_phone(pickup_details.get('contactInformation', {}).get('phone', '50712345678')),  # Usar phone si no hay mobile
+                            "companyName": self._clean_text(pickup_details.get('contactInformation', {}).get('companyName', 'Empresa')),
+                            "fullName": self._clean_text(pickup_details.get('contactInformation', {}).get('fullName', 'Nombre'))
+                        }
+                    }
+                },
+                "shipmentDetails": shipment_details if shipment_details else [
+                    {
+                        "productCode": "P",
+                        "localProductCode": "P", 
+                        "accounts": [{"typeCode": "shipper", "number": account_number}],
+                        "isCustomsDeclarable": False,
+                        "declaredValue": 100,
+                        "declaredValueCurrency": "USD",
+                        "unitOfMeasurement": "metric",
+                        "packages": [
+                            {
+                                "typeCode": "3BX",
+                                "weight": 1.0,
+                                "dimensions": {
+                                    "length": 25,
+                                    "width": 35, 
+                                    "height": 15
+                                }
+                            }
+                        ]
+                    }
+                ]
+            }
+            
+            # Headers para API REST
+            headers = self._get_rest_headers()
+            
+            logger.info(f"Making pickup request to: {self.endpoints['pickup']}")
+            logger.debug(f"Request payload: {pickup_payload}")
+            
+            response = requests.post(
+                self.endpoints["pickup"],
+                headers=headers,
+                json=pickup_payload,
+                verify=False,
+                timeout=30
+            )
+            
+            logger.info(f"Pickup response status: {response.status_code}")
+            
+            # Para debugging, loggear respuesta completa si es exitosa
+            if response.status_code in [200, 201]:
+                logger.info(f"Pickup response (full): {response.text}")
+            elif response.status_code >= 400:
+                logger.error(f"Pickup API Error {response.status_code} - Response: {response.text[:500]}")
+            
+            result = self._parse_rest_response(response, "Pickup")
+            
+            # Agregar información adicional a la respuesta
+            if result.get('success'):
+                pickup_info = {
+                    'planned_pickup_datetime': planned_pickup_datetime,
+                    'close_time': close_time,
+                    'location': location,
+                    'location_type': location_type,
+                    'account_number': account_number
+                }
+                result['pickup_info'] = pickup_info
+            
+            return result
+            
+        except requests.exceptions.ConnectionError as e:
+            logger.error(f"Error de conexión en create_pickup: {str(e)}")
+            return {
+                'success': False,
+                'error': 'Error de conexión con DHL API. Verifique su conexión a internet y vuelva a intentar.',
+                'error_code': 'CONNECTION_ERROR',
+                'details': str(e)
+            }
+        except requests.exceptions.Timeout as e:
+            logger.error(f"Timeout en create_pickup: {str(e)}")
+            return {
+                'success': False,
+                'error': 'Timeout en la conexión con DHL API. Vuelva a intentar en unos momentos.',
+                'error_code': 'TIMEOUT_ERROR',
+                'details': str(e)
+            }
+        except Exception as e:
+            logger.error(f"Error en create_pickup: {str(e)}")
+            return {
+                "success": False,
+                "message": "Ha ocurrido un error",
+                "error_type": "unexpected_error"
+            }
+
     def validate_account(self, account_number):
         """
         Valida si una cuenta DHL existe y está activa usando la API REST
@@ -1076,6 +1483,19 @@ class DHLService:
                         "tracking_number": data.get('shipmentTrackingNumber', ''),
                         "shipment_data": data,
                         "message": "Envío creado exitosamente"
+                    }
+                elif service_type == "Pickup":
+                    # Para pickups exitosos, extraer el dispatch confirmation number
+                    confirmation_numbers = data.get('dispatchConfirmationNumbers', [])
+                    confirmation_number = confirmation_numbers[0] if confirmation_numbers else data.get('dispatchConfirmationNumber', '')
+                    
+                    parsed = {
+                        "success": True,
+                        "dispatch_confirmation_number": confirmation_number,
+                        "confirmation_number": confirmation_number,  # Agregar ambos campos para compatibilidad
+                        "pickup_data": data,
+                        "raw_response": data,  # Mantener respuesta completa para debugging
+                        "message": "Recogida programada exitosamente"
                     }
                 else:
                     parsed = {
@@ -1389,6 +1809,7 @@ class DHLService:
                 "shipment_info": {
                     "tracking_number": shipment_info['tracking_number'],
                     "status": shipment_info['status'],
+
                     "status_description": shipment_info['status_description'],
                     "origin": shipment_info['origin'],
                     "destination": shipment_info['destination'],

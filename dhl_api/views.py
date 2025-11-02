@@ -40,8 +40,15 @@ import requests
 import json
 from django.core.paginator import Paginator
 from django.db.models import Q
-from django.conf import settings
 from decimal import Decimal, ROUND_HALF_UP
+from .utils.country_utils import get_country_name_from_iso as _get_country_name_from_iso
+
+# Intentar importar helper de mapeo si existe; definir fallback
+try:
+    from .utils.service_area_mapping import get_city_service_area_mapping  # type: ignore
+except Exception:  # pragma: no cover - fallback seguro
+    def get_city_service_area_mapping(country_code: str, city_name: str):
+        return None
 
 logger = logging.getLogger(__name__)
 
@@ -235,7 +242,7 @@ def login_view(request):
                     user_agent=request.META.get('HTTP_USER_AGENT')
                 )
             except User.DoesNotExist:
-                pass  # Usuario no existe, no registramos la actividad
+                pass  # Usuario no existe, no registramos a actividad
             
             return Response({
                 'success': False,
@@ -1106,1962 +1113,128 @@ def landed_cost_view(request):
 
 
 @api_view(['POST'])
-@permission_classes([AllowAny])
-def tracking_view(request):
+@permission_classes([IsAuthenticated])
+def pickup_view(request):
     """
-    Endpoint para rastrear envíos DHL usando el número de tracking.
+    Vista para crear una solicitud de recogida (pickup booking) con DHL
+    
+    Args:
+        request: Solicitud HTTP con datos del pickup
+        
+    Returns:
+        Response: Respuesta JSON con resultado de la operación
     """
     try:
-        # ✅ Validar completitud del formulario
-        is_complete, validation_error = validate_form_completeness(request.data, 'tracking')
-        if not is_complete:
-            return validation_error
-            
-        tracking_number = request.data.get('tracking_number')
-        username = request.user.username if request.user.is_authenticated else 'anonymous'
-        logger.info(f"Tracking request received for {tracking_number} by {username}")
-        
-        
-        if not tracking_number:
-            logger.warning("No tracking number provided")
-            return Response({
-                'success': False,
-                'message': 'Número de tracking requerido',
-                'request_timestamp': datetime.now(),
-                'requested_by': username
-            }, status=status.HTTP_400_BAD_REQUEST)
-        
-        
-        try:
-            dhl_account = None
-            if request.user.is_authenticated:
-                dhl_account = DHLAccount.objects.filter(created_by=request.user).first()
-                if not dhl_account:
-                    logger.info(f"No DHL account found for user {request.user.username}, creating default account")
-                    
-                    
-                    dhl_account = DHLAccount.objects.create(
-                        account_number="706065602",
-                        account_name="Cuenta DHL por defecto",
-                        is_active=True,
-                        is_default=True,
-                        created_by=request.user,
-                        validation_status='pending'
-                    )
-                    logger.info(f"Default DHL account created for user {request.user.username}")
-            else:
-                logger.info("Using default DHL configuration for anonymous user")
-                
-        except Exception as e:
-            logger.error(f"Error creating default DHL account: {str(e)}")
-            return Response({
-                'success': False,
-                'message': 'Ha ocurrido un error',
-                'error_code': 'DB_ERROR',
-                'request_timestamp': datetime.now(),
-                'requested_by': username
-            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        
-        if dhl_account:
-            logger.info(f"Using DHL account: {dhl_account.account_name} ({dhl_account.account_number})")
-        else:
-            logger.info("Using default DHL configuration from settings")
-        
-        # Usar el servicio DHL que ya tiene el parsing correcto
-        logger.info(f"Using DHL service for tracking number {tracking_number}")
-        
-        try:
-            dhl_service = DHLService(
-                username=settings.DHL_USERNAME,
-                password=settings.DHL_PASSWORD,
-                base_url=settings.DHL_BASE_URL,
-                environment=settings.DHL_ENVIRONMENT
-            )
-            
-            # Usar el servicio que ya tiene el parsing correcto para repesaje
-            tracking_info = dhl_service.get_tracking(tracking_number)
-            
-            logger.info(f"DHL service response: {tracking_info}")
-            
-        except Exception as e:
-            logger.error(f"Error with DHL service: {str(e)}")
-            return Response({
-                'success': False,
-                'message': 'Ha ocurrido un error',
-                'error_type': 'dhl_service_error',
-                'request_timestamp': datetime.now().isoformat(),
-                'tracking_number': tracking_number,
-                'requested_by': request.user.username if request.user.is_authenticated else 'anonymous'
-            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        
-        
-        # Permitir incluir la respuesta cruda de DHL si el cliente lo solicita
-        include_raw = False
-        try:
-            include_raw = bool(request.data.get('include_raw', False))
-        except Exception:
-            include_raw = False
-
-        # Construir respuesta rica con los campos clave del tracking DHL
-        shipment_info = tracking_info.get('shipment_info', {})
-        response_data = {
-            'success': tracking_info.get('success', False),
-            'status': tracking_info.get('status', shipment_info.get('status_description')),  # Estado legible
-            'tracking_number': tracking_info.get('tracking_number', tracking_number),
-            'dhl_tracking_url': f"https://www.dhl.com/global-en/home/tracking/tracking-express.html?submit=1&tracking-id={tracking_number}",
-
-            # Información principal del envío
-            'tracking_info': shipment_info,
-
-            # Eventos y piezas (listas)
-            'events': tracking_info.get('events', []),
-            'piece_details': tracking_info.get('piece_details', []),
-
-            # Contadores (compatibilidad y claridad)
-            'total_events': tracking_info.get('total_events', 0),
-            'total_pieces': tracking_info.get('total_pieces', 0),
-            'events_count': tracking_info.get('total_events', 0),
-            'pieces_count': tracking_info.get('total_pieces', 0),
-
-            # Info adicional resumida
-            'additional_info': tracking_info.get('additional_info', {}),
-            'message': tracking_info.get('message', ''),
-            'request_timestamp': datetime.now(),
-            'requested_by': request.user.username if request.user.is_authenticated else 'anonymous'
-        }
-
-        # Aliases numéricos para compatibilidad con visores de logs simples
-        response_data['pieces'] = response_data.get('total_pieces', 0)
-        response_data['events_total'] = response_data.get('total_events', 0)
-
-        # Resumen compacto útil para auditoría/log
-        response_data['summary'] = {
-            'status': response_data.get('status'),
-            'status_code': shipment_info.get('status'),
-            'events': response_data.get('total_events', 0),
-            'pieces': response_data.get('total_pieces', 0),
-            'total_weight': shipment_info.get('total_weight'),
-            'weight_unit': shipment_info.get('weight_unit'),
-            'origin': shipment_info.get('origin'),
-            'destination': shipment_info.get('destination'),
-            'service_type': shipment_info.get('service_type', shipment_info.get('service')),
-        }
-
-        # Resumen de pesos clave para cotización: total envío, suma de piezas y pieza más pesada
-        try:
-            def _to_decimal(v):
-                """Convierte a Decimal seguro; ignora vacíos, NaN e infinitos."""
-                if v is None:
-                    return None
-                # tratar strings vacíos o 'NaN'
-                if isinstance(v, str) and not v.strip():
-                    return None
-                try:
-                    d = Decimal(str(v))
-                except Exception:
-                    return None
-                # Ignorar no finitos (NaN, Inf)
-                try:
-                    if not d.is_finite():
-                        return None
-                except Exception:
-                    return None
-                return d
-
-            def _round_2(v):
-                return v.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-
-            unit = shipment_info.get('weight_unit') or 'KG'
-            shipment_total = _to_decimal(shipment_info.get('total_weight'))
-
-            pieces = tracking_info.get('piece_details', []) or []
-            piece_weights = []
-            for p in pieces:
-                w = None
-                # Prioridad ampliada: selected > actual(reweigh) > actual > declared > peso_declarado > weight
-                wi = p.get('weight_info') or {}
-
-                # Helper para extraer valor desde dict o número
-                def _val(x):
-                    if isinstance(x, dict):
-                        return _to_decimal(x.get('value') if 'value' in x else x.get('amount'))
-                    return _to_decimal(x)
-
-                preferred_keys_weightinfo = (
-                    'selected_weight',
-                    'actual_weight_reweigh',
-                    'actual_weight',
-                    'declared_weight',
-                    'peso_declarado',
-                    'repesaje',
-                    'weight',
-                )
-                preferred_keys_piece = preferred_keys_weightinfo
-
-                for key in preferred_keys_weightinfo:
-                    if key in wi and w is None:
-                        w = _val(wi.get(key))
-                if w is None:
-                    for key in preferred_keys_piece:
-                        if key in p and w is None:
-                            w = _val(p.get(key))
-                if w is not None:
-                    piece_weights.append(w)
-
-            sum_pieces = _round_2(sum(piece_weights, Decimal('0'))) if piece_weights else Decimal('0.00')
-            max_piece = _round_2(max(piece_weights)) if piece_weights else Decimal('0.00')
-            if shipment_total is not None:
-                shipment_total = _round_2(shipment_total)
-
-            candidates = [c for c in (shipment_total, sum_pieces, max_piece) if c is not None]
-            highest = _round_2(max(candidates)) if candidates else None
-
-            response_data['weights_summary'] = {
-                'shipment_total': float(shipment_total) if shipment_total is not None else None,
-                'sum_pieces': float(sum_pieces),
-                'max_piece': float(max_piece),
-                'unit': unit,
-                'highest_for_quote': float(highest) if highest is not None else None
-            }
-
-            # Tres sumas estilo SOAP: declarado, repesaje (actual) y volumétrico (round-then-sum)
-            sum_declared = Decimal('0')
-            sum_actual = Decimal('0')
-            sum_dimensional = Decimal('0')
-
-            for p in pieces:
-                wi = p.get('weight_info') or {}
-                # Declarado: declared_weight | peso_declarado
-                dec = (
-                    wi.get('declared_weight',
-                           p.get('declared_weight', p.get('peso_declarado')))
-                )
-                # Repesaje/Actual: actual_weight_reweigh | actual_weight | repesaje
-                act = (
-                    wi.get('actual_weight_reweigh',
-                           wi.get('actual_weight',
-                                  p.get('actual_weight', p.get('repesaje'))))
-                )
-
-                # Dimensional provisto por DHL si existe
-                dim = None
-                if 'dhl_dimensional_weight' in wi:
-                    dim = wi.get('dhl_dimensional_weight')
-                elif 'dhl_dimensional_weight' in p:
-                    dim = p.get('dhl_dimensional_weight')
-
-                d_dec = _to_decimal(dec)
-                d_act = _to_decimal(act)
-                d_dim = _to_decimal(dim)
-
-                if d_dec is not None:
-                    sum_declared += _round_2(d_dec)
-                if d_act is not None:
-                    sum_actual += _round_2(d_act)
-                if d_dim is not None:
-                    sum_dimensional += _round_2(d_dim)
-
-            # Redondeo final a 2 decimales
-            sum_declared = _round_2(sum_declared)
-            sum_actual = _round_2(sum_actual)
-            sum_dimensional = _round_2(sum_dimensional)
-
-            soap_candidates = [c for c in (sum_declared, sum_actual, sum_dimensional) if c is not None]
-            soap_highest = _round_2(max(soap_candidates)) if soap_candidates else None
-
-            response_data['weights_three_sums'] = {
-                'sum_declared': float(sum_declared),
-                'sum_actual': float(sum_actual),
-                'sum_dimensional': float(sum_dimensional),
-                'unit': unit,
-                'highest_for_quote': float(soap_highest) if soap_highest is not None else None
-            }
-
-            # Pesos por pieza: declarado, actual (repesaje), volumétrico
-            weights_by_piece = []
-            for idx, p in enumerate(pieces):
-                wi = p.get('weight_info') or {}
-                # Declarado con fallback a español
-                dec = _to_decimal(
-                    wi.get('declared_weight', p.get('declared_weight', p.get('peso_declarado')))
-                )
-                # Actual/repesaje con alias
-                act = _to_decimal(
-                    wi.get('actual_weight_reweigh', wi.get('actual_weight', p.get('actual_weight', p.get('repesaje'))))
-                )
-                dim = None
-                if 'dhl_dimensional_weight' in wi:
-                    dim = _to_decimal(wi.get('dhl_dimensional_weight'))
-                elif 'dhl_dimensional_weight' in p:
-                    dim = _to_decimal(p.get('dhl_dimensional_weight'))
-
-                item = {
-                    'index': idx,
-                    'piece_id': p.get('piece_id') or p.get('pieceNumber') or p.get('id') or None,
-                    'declared': float(_round_2(dec)) if dec is not None else None,
-                    'actual': float(_round_2(act)) if act is not None else None,
-                    'dimensional': float(_round_2(dim)) if dim is not None else None,
-                    'unit': unit,
-                }
-                weights_by_piece.append(item)
-
-            response_data['weights_by_piece'] = weights_by_piece
-        except Exception as _we:
-            # Siempre incluir las claves aunque falle el cálculo para facilitar el frontend/debug
-            logger.warning(f"weights computation failed, returning defaults: {_we}")
-            unit = (tracking_info.get('shipment_info') or {}).get('weight_unit') or 'KG'
-            response_data['weights_summary'] = {
-                'shipment_total': None,
-                'sum_pieces': 0.0,
-                'max_piece': 0.0,
-                'unit': unit,
-                'highest_for_quote': None,
-            }
-            response_data['weights_three_sums'] = {
-                'sum_declared': 0.0,
-                'sum_actual': 0.0,
-                'sum_dimensional': 0.0,
-                'unit': unit,
-                'highest_for_quote': None,
-            }
-            response_data['weights_by_piece'] = []
-
-        # Incluir payload crudo de DHL según bandera
-        if include_raw:
-            # raw_data del parser + metadatos HTTP si están disponibles
-            if 'raw_data' in tracking_info:
-                response_data['raw_data'] = tracking_info['raw_data']
-            if 'http_status' in tracking_info:
-                response_data['http_status'] = tracking_info['http_status']
-            if 'response_headers' in tracking_info:
-                response_data['response_headers'] = tracking_info['response_headers']
-
-        # Reglas de negocio: si DHL no devuelve peso volumétrico, requerir cuenta para cotizar con este peso
-        try:
-            pieces_for_flags = tracking_info.get('piece_details', []) or []
-            shipment_info_for_flags = tracking_info.get('shipment_info', {}) or {}
-            # ¿Hay peso volumétrico oficial de DHL?
-            dhl_total_dim = shipment_info_for_flags.get('dhl_total_dimensional_weight')
-            has_dhl_total_dim = bool(dhl_total_dim) and float(dhl_total_dim) > 0
-            has_piece_dhl_dim = any(
-                float(p.get('dhl_dimensional_weight') or (p.get('weight_info') or {}).get('dhl_dimensional_weight') or 0) > 0
-                for p in pieces_for_flags
-            )
-            volumetric_from_dhl = bool(has_dhl_total_dim or has_piece_dhl_dim)
-
-            # ¿Hay pesos declarado y repesaje presentes en al menos una pieza?
-            declared_present = any(
-                (p.get('peso_declarado') is not None) or ((p.get('weight_info') or {}).get('declared_weight') is not None)
-                for p in pieces_for_flags
-            )
-            actual_present = any(
-                (p.get('repesaje') is not None) or ((p.get('weight_info') or {}).get('actual_weight_reweigh') is not None) or ((p.get('weight_info') or {}).get('actual_weight') is not None)
-                for p in pieces_for_flags
-            )
-
-            # Regla dada por negocio: si NO hay volumétrico oficial, debemos pedir crear/usar cuenta antes de cotizar con ese peso
-            needs_account_for_quote = not volumetric_from_dhl
-
-            # Peso sugerido para cotización (ya calculado arriba)
-            suggested = None
-            try:
-                w_summary = response_data.get('weights_summary') or {}
-                w_three = response_data.get('weights_three_sums') or {}
-                cands = [
-                    w_summary.get('highest_for_quote'),
-                    w_three.get('highest_for_quote'),
-                ]
-                cands = [float(x) for x in cands if x is not None]
-                suggested = max(cands) if cands else None
-            except Exception:
-                suggested = None
-
-            response_data['account_requirements'] = {
-                'volumetric_from_dhl': volumetric_from_dhl,
-                'declared_present': declared_present,
-                'actual_present': actual_present,
-                'needs_account_for_quote': needs_account_for_quote,
-                'reason': None if volumetric_from_dhl else 'missing_dhl_volumetric_weight',
-                'cta': {
-                    'action': 'create_account',
-                    'endpoint': '/api/accounts/create/'
-                }
-            }
-            response_data['quote_with_weight'] = {
-                'allowed': not needs_account_for_quote,
-                'blocked_reason': None if not needs_account_for_quote else 'missing_dhl_volumetric_weight',
-                'suggested_weight': suggested,
-                'unit': (response_data.get('weights_summary') or {}).get('unit') or 'kg'
-            }
-        except Exception as _af:
-            logger.debug(f"account gating flags skipped: {_af}")
-
-        # Modo "raw_only": devolver únicamente la respuesta cruda de DHL (útil para debugging)
-        try:
-            raw_only = bool(request.data.get('raw_only', False))
-        except Exception:
-            raw_only = False
-        if raw_only:
-            raw_block = {
-                'success': tracking_info.get('success', False),
-                'http_status': tracking_info.get('http_status'),
-                'response_headers': tracking_info.get('response_headers'),
-                'raw_data': tracking_info.get('raw_data')
-            }
-            return Response(raw_block)
-        
-        if not tracking_info.get('success'):
-            logger.warning(f"Tracking failed for {tracking_number}: {tracking_info.get('message')}")
-            response_data.update({
-                'error_code': tracking_info.get('error_code', 'TRACKING_ERROR'),
-                'suggestion': tracking_info.get('suggestion', 'Reintentar más tarde'),
-                'raw_response': tracking_info.get('raw_response', '')
-            })
-            # Registrar actividad con payloads (error)
-            try:
-                if request.user.is_authenticated:
-                    UserActivity.log_activity(
-                        user=request.user,
-                        action='track_shipment',
-                        description=f"Error tracking {tracking_number}: {tracking_info.get('message', '')}",
-                        status='error',
-                        ip_address=request.META.get('REMOTE_ADDR'),
-                        user_agent=request.META.get('HTTP_USER_AGENT'),
-                        resource_type='tracking',
-                        resource_id=str(tracking_number),
-                        metadata={
-                            'request_payload': {'tracking_number': tracking_number},
-                            'response_payload': {
-                                'success': False,
-                                'message': tracking_info.get('message'),
-                                'error_code': tracking_info.get('error_code'),
-                                'raw_response_preview': tracking_info.get('raw_response')
-                            }
-                        }
-                    )
-            except Exception as _e:
-                logger.debug(f"Activity log for tracking error skipped: {_e}")
-            return Response(response_data, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        
-        logger.info(f"Tracking successful for {tracking_number}")
-        # Registrar actividad con payloads (success) enriquecidos para visibilidad en UI/logs
-        try:
-            if request.user.is_authenticated:
-                # Resumen compacto
-                _si = shipment_info
-                _events = tracking_info.get('events', [])
-                _last_event = _events[-1] if _events else {}
-                _summary = {
-                    'status': response_data.get('status'),
-                    'total_weight': _si.get('total_weight'),
-                    'weight_unit': _si.get('weight_unit'),
-                    'origin': _si.get('origin'),
-                    'destination': _si.get('destination'),
-                    'service_type': _si.get('service_type', _si.get('service')),
-                    'last_event': {
-                        'description': _last_event.get('description'),
-                        'date': _last_event.get('date'),
-                        'time': _last_event.get('time'),
-                        'location': _last_event.get('location'),
-                        'type_code': _last_event.get('type_code')
-                    } if _last_event else None,
-                    'tracking_url': response_data.get('dhl_tracking_url')
-                }
-
-                UserActivity.log_activity(
-                    user=request.user,
-                    action='track_shipment',
-                    description=f'Tracking consultado - {tracking_number}',
-                    status='success',
-                    ip_address=request.META.get('REMOTE_ADDR'),
-                    user_agent=request.META.get('HTTP_USER_AGENT'),
-                    resource_type='tracking',
-                    resource_id=str(tracking_number),
-                    metadata={
-                        'request_payload': {'tracking_number': tracking_number},
-                        'response_payload': {
-                            'success': True,
-                            'message': tracking_info.get('message'),
-                            'events': tracking_info.get('total_events', 0),
-                            'pieces': tracking_info.get('total_pieces', 0),
-                            'status': _summary['status'],
-                            'total_weight': _summary['total_weight'],
-                            'weight_unit': _summary['weight_unit'],
-                            'origin': _summary['origin'],
-                            'destination': _summary['destination'],
-                            'service_type': _summary['service_type'],
-                            'last_event': _summary['last_event'],
-                            'tracking_url': _summary['tracking_url']
-                        }
-                    }
-                )
-        except Exception as _e:
-            logger.debug(f"Activity log for tracking success skipped: {_e}")
-        return Response(response_data)
-        
-    except Exception as e:
-        logger.exception(f"Error in tracking_view: {str(e)}")
-        return Response({
-            'success': False,
-            'message': 'Ha ocurrido un error',
-            'error_code': 'SERVER_ERROR',
-            'suggestion': 'Reintentar más tarde',
-            'request_timestamp': datetime.now(),
-            'tracking_number': tracking_number if 'tracking_number' in locals() else None,
-            'requested_by': request.user.username
-        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-
-@api_view(['POST'])
-@permission_classes([IsAuthenticated])
-def epod_view(request):
-    """
-    Endpoint para obtener Electronic Proof of Delivery (ePOD) de envíos DHL.
-    
-    Este endpoint permite obtener documentos ePOD de envíos DHL que incluyen
-    información detallada sobre la entrega, firmante, fecha y hora de entrega,
-    y otros detalles relevantes del proceso de entrega.
-    
-    **Método HTTP:** POST
-    **Permisos:** Usuario autenticado (IsAuthenticated)
-    
-    **Parámetros de entrada (JSON):**
-    - shipment_id (str): Número de tracking DHL
-    - account_number (str, opcional): Número de cuenta DHL
-    - content_type (str, opcional): Tipo de contenido ePOD (epod-summary por defecto)
-    
-    **Respuesta exitosa (200):**
-    {
-        "success": true,
-        "status": "found|not_found|processing_error",
-        "message": "Mensaje descriptivo del resultado",
-        "epod_data": {
-            "pdf_data": "base64-encoded-pdf...",
-            "format": "PDF",
-            "type_code": "POD",
-            "size_mb": 0.5,
-            "total_documents": 1
-        },
-        "processing_info": {
-            "search_performed": true,
-            "documents_found": 1,
-            "valid_documents": 1,
-            "invalid_documents": 0,
-            "largest_document_mb": 0.5
-        },
-        "request_info": {
-            "shipment_id": "1234567890",
-            "content_type": "epod-summary", 
-            "account_number": "123456789",
-            "timestamp": "2025-07-26T12:00:00",
-            "requested_by": "username"
-        }
-    }
-    
-    **Respuesta de error o sin resultados (200/400/500):**
-    {
-        "success": false,
-        "status": "not_found|error|validation_error",
-        "message": "Descripción clara del problema",
-        "error_code": "NO_DOCUMENTS|INVALID_CREDENTIALS|etc",
-        "suggestion": "Acción recomendada para el usuario",
-        "processing_info": {
-            "search_performed": true,
-            "api_contacted": true,
-            "response_received": true,
-            "documents_found": 0
-        },
-        "request_info": {...}
-    }
-    """
-    
-    # ✅ Validar completitud del formulario
-    is_complete, validation_error = validate_form_completeness(request.data, 'epod')
-    if not is_complete:
-        return validation_error
-    
-    # Información de la solicitud
-    request_timestamp = datetime.now()
-    request_info = {
-        "timestamp": request_timestamp.isoformat(),
-        "requested_by": request.user.username,
-        "user_id": request.user.id
-    }
-    
-    logger.info(f"ePOD request initiated by user {request.user.username} at {request_timestamp}")
-    
-    serializer = EPODRequestSerializer(data=request.data)
-    if not serializer.is_valid():
-        logger.warning(f"ePOD validation failed for user {request.user.username}: {serializer.errors}")
-        return Response({
-            'success': False,
-            'status': 'validation_error',
-            'message': 'Ha ocurrido un error',
-            'error_type': 'validation_error',
-            'errors': serializer.errors,
-            'processing_info': {
-                'search_performed': False,
-                'validation_passed': False,
-                'api_contacted': False
-            },
-            'request_info': request_info
-        }, status=status.HTTP_400_BAD_REQUEST)
-    
-    # Extraer datos validados
-    shipment_id = serializer.validated_data['shipment_id']
-    account_number = serializer.validated_data.get('account_number')
-    content_type = serializer.validated_data.get('content_type', 'epod-summary')
-    
-    # Actualizar información de la solicitud
-    request_info.update({
-        'shipment_id': shipment_id,
-        'account_number': account_number or 'default',
-        'content_type': content_type
-    })
-    
-    logger.info(f"ePOD search starting for shipment {shipment_id}, content: {content_type}")
-    
-    try:
-        # Inicializar información de procesamiento
-        processing_info = {
-            'search_performed': False,
-            'validation_passed': True,
-            'api_contacted': False,
-            'response_received': False,
-            'documents_found': 0,
-            'valid_documents': 0,
-            'invalid_documents': 0,
-            'api_response_time_ms': 0
-        }
-        
-        # Crear servicio DHL
-        dhl_service = DHLService(
-            username=settings.DHL_USERNAME,
-            password=settings.DHL_PASSWORD,
-            base_url=settings.DHL_BASE_URL,
-            environment=settings.DHL_ENVIRONMENT
-        )
-        
-        processing_info['search_performed'] = True
-        logger.info(f"DHL service initialized for ePOD search")
-        
-        # Realizar búsqueda de ePOD
-        search_start = datetime.now()
-        result = dhl_service.get_ePOD(
-            shipment_id=shipment_id,
-            account_number=account_number,
-            content_type=content_type
-        )
-        search_end = datetime.now()
-        
-        # Calcular tiempo de respuesta
-        response_time_ms = int((search_end - search_start).total_seconds() * 1000)
-        processing_info['api_response_time_ms'] = response_time_ms
-        processing_info['api_contacted'] = True
-        processing_info['response_received'] = True
-        
-        logger.info(f"ePOD API response received in {response_time_ms}ms")
-        
-        # Analizar resultado y preparar respuesta para el cliente
-        if result.get('success'):
-            # ePOD encontrado exitosamente
-            processing_info.update({
-                'documents_found': result.get('total_documents', 0),
-                'valid_documents': result.get('valid_documents', 0),
-                'invalid_documents': result.get('invalid_documents', 0),
-                'largest_document_mb': result.get('processing_summary', {}).get('largest_document_mb', 0)
-            })
-            
-            client_response = {
-                'success': True,
-                'status': 'found',
-                'message': f'ePOD encontrado exitosamente - {result.get("valid_documents", 1)} documento(s) disponible(s)',
-                'epod_data': {
-                    'pdf_data': result.get('pdf_data', ''),
-                    'format': result.get('format', 'PDF'),
-                    'type_code': result.get('type_code', 'POD'),
-                    'size_bytes': result.get('size_bytes', 0),
-                    'size_mb': result.get('size_mb', 0),
-                    'is_pdf': result.get('is_pdf', True),
-                    'total_documents': result.get('total_documents', 0),
-                    'all_documents': result.get('all_documents', [])
-                },
-                'processing_info': processing_info,
-                'request_info': request_info
-            }
-            
-            logger.info(f"ePOD found successfully for {shipment_id}: {result.get('size_mb', 0)}MB")
-            # Registrar actividad ePOD success
-            try:
-                UserActivity.log_activity(
-                    user=request.user,
-                    action='epod_request',
-                    description=f"ePOD encontrado - {shipment_id}",
-                    status='success',
-                    ip_address=request.META.get('REMOTE_ADDR'),
-                    user_agent=request.META.get('HTTP_USER_AGENT'),
-                    resource_type='epod',
-                    resource_id=str(shipment_id),
-                    metadata={
-                        'request_payload': {
-                            'shipment_id': shipment_id,
-                            'account_number': account_number,
-                            'content_type': content_type
-                        },
-                        'response_payload': {
-                            'success': True,
-                            'message': result.get('message'),
-                            'documents_found': result.get('total_documents', 0),
-                            'valid_documents': result.get('valid_documents', 0),
-                            'size_mb': result.get('size_mb', 0)
-                        }
-                    }
-                )
-            except Exception as _e:
-                logger.debug(f"Activity log for ePOD success skipped: {_e}")
-            return Response(client_response, status=status.HTTP_200_OK)
-            
-        else:
-            # ePOD no encontrado o error
-            error_code = result.get('error_code', 'UNKNOWN_ERROR')
-            error_message = result.get('message', 'Error desconocido')
-            suggestion = result.get('suggestion', 'Contactar soporte técnico')
-            
-            # Actualizar información de procesamiento
-            processing_info.update({
-                'documents_found': result.get('total_documents', 0),
-                'valid_documents': result.get('valid_documents', 0),
-                'invalid_documents': result.get('invalid_documents', 0),
-                'error_code': error_code
-            })
-            
-            # Determinar estado según el tipo de error
-            if error_code in ['NO_DOCUMENTS', '404']:
-                status_code = 'not_found'
-                user_message = 'Ha ocurrido un error'
-            elif error_code in ['401', 'INVALID_CREDENTIALS']:
-                status_code = 'authentication_error'
-                user_message = 'Ha ocurrido un error'
-            elif error_code in ['TIMEOUT_ERROR', 'CONNECTION_ERROR']:
-                status_code = 'connection_error'
-                user_message = 'Ha ocurrido un error'
-            else:
-                status_code = 'processing_error'
-                user_message = 'Ha ocurrido un error'
-            
-            client_response = {
-                'success': False,
-                'status': status_code,
-                'message': user_message,
-                'error_code': error_code,
-                'suggestion': suggestion,
-                'processing_info': processing_info,
-                'request_info': request_info,
-                'troubleshooting': {
-                    'shipment_delivered': 'Verifique que el envío haya sido entregado',
-                    'tracking_number': 'Confirme que el número de tracking sea correcto',
-                    'account_access': 'Verifique que su cuenta tenga acceso a ePOD',
-                    'contact_support': 'Si persiste el problema, contacte soporte'
-                }
-            }
-            
-            logger.warning(f"ePOD not found for {shipment_id}: {error_code} - {error_message}")
-            
-            # Determinar código HTTP según el tipo de error
-            if error_code in ['NO_DOCUMENTS', '404']:
-                http_status = status.HTTP_200_OK  # No es error del servidor
-            elif error_code in ['401', 'INVALID_CREDENTIALS']:
-                http_status = status.HTTP_401_UNAUTHORIZED
-            elif error_code in ['TIMEOUT_ERROR', 'CONNECTION_ERROR']:
-                http_status = status.HTTP_503_SERVICE_UNAVAILABLE
-            else:
-                http_status = status.HTTP_200_OK  # Error controlado
-            # Registrar actividad ePOD error/not found
-            try:
-                UserActivity.log_activity(
-                    user=request.user,
-                    action='epod_request',
-                    description=f"ePOD no disponible - {shipment_id}: {error_code}",
-                    status='error',
-                    ip_address=request.META.get('REMOTE_ADDR'),
-                    user_agent=request.META.get('HTTP_USER_AGENT'),
-                    resource_type='epod',
-                    resource_id=str(shipment_id),
-                    metadata={
-                        'request_payload': {
-                            'shipment_id': shipment_id,
-                            'account_number': account_number,
-                            'content_type': content_type
-                        },
-                        'response_payload': {
-                            'success': False,
-                            'message': error_message,
-                            'error_code': error_code,
-                            'http_status': http_status,
-                            'suggestion': suggestion
-                        }
-                    }
-                )
-            except Exception as _e:
-                logger.debug(f"Activity log for ePOD error skipped: {_e}")
-            
-            return Response(client_response, status=http_status)
-            
-    except Exception as e:
-        # Error interno no controlado
-        logger.exception(f"Unexpected error in ePOD view for shipment {shipment_id}: {str(e)}")
-        
-        processing_info.update({
-            'search_performed': True,
-            'unexpected_error': True,
-            'error_details': str(e)
-        })
-        
-        error_response = {
-            'success': False,
-            'status': 'internal_error',
-            'message': 'Ha ocurrido un error',
-            'error_code': 'INTERNAL_ERROR',
-            'suggestion': 'Intente nuevamente en unos minutos o contacte soporte si persiste',
-            'processing_info': processing_info,
-            'request_info': request_info,
-            'support_info': {
-                'error_id': f"epod-{request_timestamp.strftime('%Y%m%d-%H%M%S')}-{request.user.id}",
-                'contact': 'Proporcione este ID al contactar soporte técnico'
-            }
-        }
-        
-        # Registrar actividad ePOD unexpected error
-        try:
-            UserActivity.log_activity(
-                user=request.user,
-                action='epod_request',
-                description=f"Error interno ePOD - {shipment_id}",
-                status='error',
-                ip_address=request.META.get('REMOTE_ADDR'),
-                user_agent=request.META.get('HTTP_USER_AGENT'),
-                resource_type='epod',
-                resource_id=str(shipment_id),
-                metadata={
-                    'request_payload': {
-                        'shipment_id': shipment_id,
-                        'account_number': account_number,
-                        'content_type': content_type
-                    },
-                    'response_payload': {
-                        'success': False,
-                        'message': 'Ha ocurrido un error',
-                        'error_code': 'INTERNAL_ERROR'
-                    }
-                }
-            )
-        except Exception as _e:
-            logger.debug(f"Activity log for ePOD exception skipped: {_e}")
-        return Response(error_response, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-
-@api_view(['POST'])
-@permission_classes([IsAuthenticated])
-def shipment_view(request):
-    """
-    Endpoint para crear nuevos envíos DHL.
-    
-    Este endpoint permite crear nuevos envíos utilizando la API de DHL.
-    Valida los datos de entrada, crea el envío en el sistema DHL,
-    y guarda la información del envío en la base de datos local.
-    
-    **Método HTTP:** POST
-    **Permisos:** Usuario autenticado (IsAuthenticated)
-    
-    **Parámetros de entrada (JSON):**
-    - shipment_date (str): Fecha de envío en formato YYYY-MM-DD
-    - origin (dict): Información del origen
-        - name (str): Nombre del remitente
-        - company (str): Empresa
-        - address (str): Dirección
-        - postal_code (str): Código postal
-        - city (str): Ciudad
-        - country (str): País (código ISO)
-        - phone (str): Teléfono
-    - destination (dict): Información del destino
-        - name (str): Nombre del destinatario
-        - company (str): Empresa
-        - address (str): Dirección
-        - postal_code (str): Código postal
-        - city (str): Ciudad
-        - country (str): País (código ISO)
-        - phone (str): Teléfono
-    - packages (list): Lista de paquetes
-        - weight (float): Peso en kg
-        - dimensions (dict): Dimensiones en cm
-            - length (float): Largo
-            - width (float): Ancho
-            - height (float): Alto
-    - service_code (str): Código del servicio DHL
-    - payment_info (dict): Información de pago
-        - account_number (str): Número de cuenta DHL
-    
-    **Respuesta exitosa (200):**
-    {
-        "success": true,
-        "shipment_data": {
-            "tracking_number": "1234567890",
-            "shipment_id": "ABC123456",
-            "total_cost": 125.50,
-            "currency": "USD",
-            "estimated_delivery": "2025-07-10",
-            "label_url": "https://example.com/label.pdf"
-        },
-        "request_timestamp": "2025-07-07T10:30:00",
-        "requested_by": "username"
-    }
-    
-    **Respuesta de error (400/500):**
-    {
-        "success": false,
-        "message": "Ha ocurrido un error",
-        "error_type": "validation_error|shipment_error|internal_error",
-        "request_timestamp": "2025-07-07T10:30:00"
-    }
-    
-    **Notas:**
-    - Los envíos exitosos se guardan automáticamente en la base de datos
-    - Se registra cada solicitud en los logs para auditoría
-    - Los errores se manejan de forma consistente con metadatos
-    """
-    # ✅ Validar completitud del formulario ANTES del serializer
-    is_complete, validation_error = validate_form_completeness(request.data, 'shipment')
-    if not is_complete:
-        return validation_error
-    
-    serializer = ShipmentRequestSerializer(data=request.data)
-    if serializer.is_valid():
-        try:
-            dhl_service = DHLService(
-                username=settings.DHL_USERNAME,
-                password=settings.DHL_PASSWORD,
-                base_url=settings.DHL_BASE_URL,
-                environment=settings.DHL_ENVIRONMENT
-            )
-            
-            # Transformar los datos para el servicio DHL
-            shipment_data = serializer.validated_data.copy()
-            # Sanear campos no soportados en shipper/recipient
-            def _sanitize_party(p):
-                try:
-                    p = dict(p or {})
-                except Exception:
-                    return p
-                p.pop('service_area_name', None)
-                p.pop('serviceAreaName', None)
-                if p.get('service_area') and p.get('city') and p['service_area'] == p['city']:
-                    p.pop('service_area', None)
-                if p.get('serviceArea') and p.get('city') and p['serviceArea'] == p['city']:
-                    p.pop('serviceArea', None)
-                return p
-            if 'shipper' in shipment_data:
-                shipment_data['shipper'] = _sanitize_party(shipment_data['shipper'])
-            if 'recipient' in shipment_data:
-                shipment_data['recipient'] = _sanitize_party(shipment_data['recipient'])
-            
-            # Convertir 'package' (singular) a 'packages' (plural) que espera el servicio
-            if 'package' in shipment_data:
-                shipment_data['packages'] = [shipment_data.pop('package')]
-            
-            result = dhl_service.create_shipment(
-                shipment_data=shipment_data
-            )
-            
-            # Agregar metadatos adicionales
-            result['request_timestamp'] = datetime.now().isoformat()
-            result['requested_by'] = request.user.username
-            
-            # Verificar si el resultado del servicio DHL fue exitoso
-            if result.get('success'):
-                # Guardar envío en la base de datos si es exitoso
-                try:
-                    shipper = shipment_data['shipper']
-                    recipient = shipment_data['recipient']
-                    package = shipment_data['packages'][0]  # Tomar el primer paquete
-                    
-                    shipment = Shipment.objects.create(
-                        tracking_number=result.get('tracking_number'),
-                        status='created',
-                        service_type=shipment_data.get('service', 'P'),
-                        payment_type=shipment_data.get('payment', 'S'),
-                        shipper_name=shipper.get('name', ''),
-                        shipper_company=shipper.get('company', ''),
-                        shipper_phone=shipper.get('phone', ''),
-                        shipper_email=shipper.get('email', ''),
-                        shipper_address=shipper.get('address', ''),
-                        shipper_city=shipper.get('city', ''),
-                        shipper_state=shipper.get('state', ''),
-                        shipper_postal_code=shipper.get('postalCode', ''),
-                        shipper_country=shipper.get('country', ''),
-                        recipient_name=recipient.get('name', ''),
-                        recipient_company=recipient.get('company', ''),
-                        recipient_phone=recipient.get('phone', ''),
-                        recipient_email=recipient.get('email', ''),
-                        recipient_address=recipient.get('address', ''),
-                        recipient_city=recipient.get('city', ''),
-                        recipient_state=recipient.get('state', ''),
-                        recipient_postal_code=recipient.get('postalCode', ''),
-                        recipient_country=recipient.get('country', ''),
-                        package_weight=package.get('weight', 0),
-                        package_length=package.get('length', 0),
-                        package_width=package.get('width', 0),
-                        package_height=package.get('height', 0),
-                        package_description=package.get('description', ''),
-                        package_value=package.get('value', 0),
-                        package_currency=package.get('currency', 'USD'),
-                        estimated_delivery=result.get('estimated_delivery', ''),
-                        cost=result.get('cost', ''),
-                        created_by=request.user
-                    )
-                    
-                    # Agregar el envío al resultado
-                    result['shipment_id'] = shipment.id
-                    result['shipment_status'] = 'created'
-                    
-                    # Log del resultado para debugging
-                    logger.info(f"Shipment created successfully by {request.user.username}: {result.get('tracking_number', 'No tracking')}")
-                    
-                    # Registrar actividad de creación de envío
-                    UserActivity.log_activity(
-                        user=request.user,
-                        action='create_shipment',
-                        description=f'Creó envío exitosamente - Tracking: {result.get("tracking_number", "No tracking")}',
-                        status='success',
-                        ip_address=request.META.get('REMOTE_ADDR'),
-                        user_agent=request.META.get('HTTP_USER_AGENT'),
-                        resource_type='shipment',
-                        resource_id=str(shipment.id),
-                        metadata={
-                            'tracking_number': result.get('tracking_number'),
-                            'service_type': serializer.validated_data.get('service_type'),
-                            'destination_country': serializer.validated_data.get('destination', {}).get('country'),
-                            # Captura de payloads
-                            'request_payload': {
-                                'shipment': shipment_data
-                            },
-                            'response_payload': {
-                                'success': True,
-                                'message': result.get('message'),
-                                'tracking_number': result.get('tracking_number')
-                            }
-                        }
-                    )
-                    
-                except Exception as db_error:
-                    logger.warning(f"Error saving shipment to DB: {str(db_error)}")
-                    # No fallar la request si hay error en DB, pero informar
-                    result['db_warning'] = 'Shipment created but not saved to database'
-                
-                # Retornar respuesta exitosa con HTTP 200
-                return Response(result)
-            else:
-                # El servicio DHL retornó un error
-                error_type = result.get('error_type', 'shipment_error')
-                
-                # Registrar actividad de error
-                UserActivity.log_activity(
-                    user=request.user,
-                    action='create_shipment',
-                    description=f'Error en DHL API: {result.get("message", "Error desconocido")}',
-                    status='error',
-                    ip_address=request.META.get('REMOTE_ADDR'),
-                    user_agent=request.META.get('HTTP_USER_AGENT'),
-                    metadata={
-                        'error_type': error_type,
-                        'dhl_message': result.get('message'),
-                        'request_data': serializer.validated_data,
-                        # Captura de payloads
-                        'request_payload': {
-                            'shipment': shipment_data
-                        },
-                        'response_payload': {
-                            'success': False,
-                            'message': result.get('message'),
-                            'error_code': result.get('error_code'),
-                            'http_status': result.get('http_status'),
-                            'raw_response_preview': result.get('raw_response')
-                        }
-                    }
-                )
-                
-                # Determinar el código de estado HTTP apropiado
-                if error_type == 'billing_country_mismatch':
-                    status_code = status.HTTP_400_BAD_REQUEST
-                elif error_type == 'validation_error':
-                    status_code = status.HTTP_400_BAD_REQUEST
-                else:
-                    status_code = status.HTTP_422_UNPROCESSABLE_ENTITY
-                
-                # Retornar error con código de estado apropiado
-                return Response(result, status=status_code)
-            
-        except Exception as e:
-            logger.error(f"Error en shipment_view: {str(e)}")
-            
-            # Registrar actividad de error
-            UserActivity.log_activity(
-                user=request.user,
-                action='create_shipment',
-                description=f'Error al crear envío: {str(e)}',
-                status='error',
-                ip_address=request.META.get('REMOTE_ADDR'),
-                user_agent=request.META.get('HTTP_USER_AGENT'),
-                metadata={'error': str(e)}
-            )
-            
-            return Response({
-                'success': False,
-                'message': 'Ha ocurrido un error',
-                'error_type': 'internal_error',
-                'request_timestamp': datetime.now().isoformat()
-            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-    
-    return Response({
-        'success': False,
-        'message': 'Ha ocurrido un error',
-        'error_type': 'validation_error',
-        'errors': serializer.errors
-    }, status=status.HTTP_400_BAD_REQUEST)
-
-
-@api_view(['GET'])
-@permission_classes([IsAuthenticated])
-def shipments_list_view(request):
-    """Endpoint para listar envíos del usuario"""
-    try:
-        shipments = Shipment.objects.filter(created_by=request.user)
-        serializer = ShipmentSerializer(shipments, many=True)
-        
-        return Response({
-            'success': True,
-            'shipments': serializer.data
-        })
-        
-    except Exception as e:
-        logger.error(f"Error en shipments_list_view: {str(e)}")
-        return Response({
-            'success': False,
-            'message': 'Ha ocurrido un error'
-        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-
-@api_view(['GET'])
-@permission_classes([IsAuthenticated])
-def shipment_detail_view(request, shipment_id):
-    """Endpoint para obtener detalles de un envío"""
-    try:
-        shipment = Shipment.objects.get(id=shipment_id, created_by=request.user)
-        serializer = ShipmentSerializer(shipment)
-        
-        return Response({
-            'success': True,
-            'shipment': serializer.data
-        })
-        
-    except Shipment.DoesNotExist:
-        return Response({
-            'success': False,
-            'message': 'Envío no encontrado'
-        }, status=status.HTTP_404_NOT_FOUND)
-    except Exception as e:
-        logger.error(f"Error en shipment_detail_view: {str(e)}")
-        return Response({
-            'success': False,
-            'message': 'Ha ocurrido un error'
-        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-
-@api_view(['GET'])
-@permission_classes([IsAuthenticated])
-def rates_history_view(request):
-    """Endpoint para obtener historial de cotizaciones"""
-    try:
-        rates = RateQuote.objects.filter(created_by=request.user)
-        serializer = RateQuoteSerializer(rates, many=True)
-        
-        return Response({
-            'success': True,
-            'rates': serializer.data
-        })
-        
-    except Exception as e:
-        logger.error(f"Error en rates_history_view: {str(e)}")
-        return Response({
-            'success': False,
-            'message': 'Ha ocurrido un error'
-        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-
-@api_view(['GET'])
-@permission_classes([IsAuthenticated])
-def dhl_status_view(request):
-    """
-    Endpoint para obtener el estado actual de la configuración DHL.
-    
-    Este endpoint proporciona información sobre la configuración actual
-    de DHL, incluyendo credenciales, URLs de endpoints, y estado de
-    los servicios disponibles.
-    
-    **Método HTTP:** GET
-    **Permisos:** Usuario autenticado (IsAuthenticated)
-    
-    **Parámetros de entrada:** Ninguno (GET request)
-    
-    **Respuesta exitosa (200):**
-    {
-        "success": true,
-        "dhl_status": {
-            "configuration": {
-                "credentials_configured": true,
-                "username": "apO3fS5mJ8zT7h",
-                "password": "***masked***",
-                "base_url": "https://xmlpi-ea.dhl.com/XMLShippingServlet",
-                "environment": "production"
-            },
-            "endpoints": {
-                "rates": "/api/rates/",
-                "tracking": "/api/tracking/",
-                "epod": "/api/epod/",
-                "shipment": "/api/shipment/",
-                "dhl_status": "/api/dhl-status/"
-            },
-            "services_available": [
-                "rates",
-                "tracking",
-                "epod",
-                "shipment"
-            ],
-            "last_check": "2025-07-07T09:00:00"
-        },
-        "request_timestamp": "2025-07-07T10:30:00",
-        "requested_by": "username"
-    }
-    
-    **Respuesta de error (500):**
-    {
-        "success": false,
-        "message": "Ha ocurrido un error",
-        "error_type": "internal_error",
-        "request_timestamp": "2025-07-07T10:30:00"
-    }
-    
-    **Notas:**
-    - La contraseña se muestra enmascarada por seguridad
-    - Se registra cada consulta en los logs para auditoría
-    - Los errores se manejan de forma consistente con metadatos
-    """
-    try:
-        config_status = {
-            'credentials_configured': bool(settings.DHL_USERNAME and settings.DHL_PASSWORD),
-            'username': settings.DHL_USERNAME,
-            'base_url': settings.DHL_BASE_URL,
-            'environment': settings.DHL_ENVIRONMENT,
-            'endpoints': {
-                'epod': 'https://wsbexpress.dhl.com/gbl/getePOD',
-                'rate': 'https://wsbexpress.dhl.com/sndpt/expressRateBook',
-                'tracking': 'https://wsbexpress.dhl.com/gbl/glDHLExpressTrack',
-                'shipment': 'https://wsbexpress.dhl.com/sndpt/expressRateBook'
-            },
-            'last_check': datetime.now().isoformat(),
-            'checked_by': request.user.username
-        }
-        
-        return Response({
-            'success': True,
-            'config': config_status,
-            'message': 'Configuración DHL obtenida exitosamente'
-        })
-        
-    except Exception as e:
-        logger.error(f"Error en dhl_status_view: {str(e)}")
-        return Response({
-            'success': False,
-            'message': 'Ha ocurrido un error',
-            'error_type': 'internal_error'
-        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-
-@api_view(['POST'])
-@permission_classes([IsAuthenticated])
-def validate_shipment_date_view(request):
-    """
-    Endpoint para validar fechas de envío antes de crear el envío.
-    
-    Este endpoint permite validar si una fecha de envío es válida según
-    los requisitos de DHL (no en el pasado, no más de 10 días en el futuro).
-    
-    **Método HTTP:** POST
-    **Permisos:** Usuario autenticado (IsAuthenticated)
-    
-    **Parámetros de entrada (JSON):**
-    - shipment_date (str, opcional): Fecha de envío en formato ISO (YYYY-MM-DDTHH:MM:SS)
-    
-    **Respuesta exitosa (200):**
-    {
-        "success": true,
-        "validation_result": {
-            "requested_date": "2025-07-15T10:00:00",
-            "validated_date": "2025-07-15T10:00:00GMT+00:00",
-            "is_valid": true,
-            "adjustments_made": false,
-            "message": "Fecha válida para envío DHL"
-        },
-        "request_timestamp": "2025-07-07T10:30:00",
-        "requested_by": "username"
-    }
-    
-    **Respuesta con ajustes (200):**
-    {
-        "success": true,
-        "validation_result": {
-            "requested_date": "2025-06-01T10:00:00",
-            "validated_date": "2025-07-08T10:00:00GMT+00:00",
-            "is_valid": false,
-            "adjustments_made": true,
-            "adjustment_reason": "Fecha en el pasado, ajustada a mañana",
-            "message": "Fecha ajustada automáticamente"
-        },
-        "request_timestamp": "2025-07-07T10:30:00",
-        "requested_by": "username"
-    }
-    
-    **Respuesta de error (500):**
-    {
-        "success": false,
-        "message": "Ha ocurrido un error",
-        "error_type": "internal_error",
-        "request_timestamp": "2025-07-07T10:30:00"
-    }
-    
-    **Notas:**
-    - Si no se proporciona fecha, se usa mañana por defecto
-    - Se registra cada validación en los logs para auditoría
-    - Los errores se manejan de forma consistente con metadatos
-    """
-    try:
-        from datetime import datetime, timedelta
-        import pytz
-        
-        # Obtener la fecha solicitada
-        requested_date = request.data.get('shipment_date')
-        
-        # Crear instancia del servicio DHL para usar su método de validación
-        dhl_service = DHLService(
-            username=settings.DHL_USERNAME,
-            password=settings.DHL_PASSWORD,
-            base_url=settings.DHL_BASE_URL,
-            environment=settings.DHL_ENVIRONMENT
-        )
-        
-        # Validar la fecha
-        now = datetime.now(pytz.UTC)
-        original_date = requested_date
-        
-        # Generar fecha válida
-        validated_timestamp = dhl_service._get_valid_ship_timestamp(requested_date)
-        
-        # Determinar si se hicieron ajustes
-        adjustments_made = False
-        adjustment_reason = None
-        
-        if requested_date:
-            try:
-                # Parsear la fecha solicitada para comparar
-                if isinstance(requested_date, str):
-                    if 'GMT' in requested_date:
-                        requested_date = requested_date.replace('GMT+00:00', '+00:00')
-                    parsed_requested = datetime.fromisoformat(requested_date.replace('Z', '+00:00'))
-                    if parsed_requested.tzinfo is None:
-                        parsed_requested = parsed_requested.replace(tzinfo=pytz.UTC)
-                    
-                    # Comparar con la fecha validada
-                    validated_dt = datetime.strptime(validated_timestamp.replace('GMT+00:00', '+00:00'), '%Y-%m-%dT%H:%M:%S%z')
-                    
-                    if abs((parsed_requested - validated_dt).total_seconds()) > 3600:  # Diferencia mayor a 1 hora
-                        adjustments_made = True
-                        if parsed_requested <= now:
-                            adjustment_reason = "Fecha en el pasado, ajustada a mañana"
-                        elif parsed_requested > now + timedelta(days=9):
-                            adjustment_reason = "Fecha muy lejana, ajustada a máximo permitido"
-                        else:
-                            adjustment_reason = "Fecha ajustada por requisitos de DHL"
-                            
-            except (ValueError, TypeError):
-                adjustments_made = True
-                adjustment_reason = "Formato de fecha inválido, usando fecha por defecto"
-        else:
-            adjustments_made = True
-            adjustment_reason = "No se proporcionó fecha, usando fecha por defecto"
-        
-        validation_result = {
-            'requested_date': original_date,
-            'validated_date': validated_timestamp,
-            'is_valid': not adjustments_made,
-            'adjustments_made': adjustments_made,
-            'message': 'Fecha válida para envío DHL' if not adjustments_made else 'Fecha ajustada automáticamente',
-            'dhl_requirements': {
-                'min_date': (now + timedelta(hours=1)).isoformat(),
-                'max_date': (now + timedelta(days=9)).isoformat(),
-                'timezone': 'UTC',
-                'format': 'YYYY-MM-DDTHH:MM:SSGMT+00:00'
-            }
-        }
-        
-        if adjustments_made:
-            validation_result['adjustment_reason'] = adjustment_reason
-        
-        # Log de la validación
-        logger.info(f"Date validation by {request.user.username}: requested={original_date}, validated={validated_timestamp}, adjusted={adjustments_made}")
-        
-        return Response({
-            'success': True,
-            'validation_result': validation_result,
-            'request_timestamp': datetime.now().isoformat(),
-            'requested_by': request.user.username
-        })
-        
-    except Exception as e:
-        logger.error(f"Error en validate_shipment_date_view: {str(e)}")
-        return Response({
-            'success': False,
-            'message': 'Ha ocurrido un error',
-            'error_type': 'internal_error',
-            'request_timestamp': datetime.now().isoformat()
-        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-
-@api_view(['GET'])
-@permission_classes([IsAuthenticated])
-def dhl_account_list(request):
-    """
-    Lista todas las cuentas DHL del usuario autenticado
-    """
-    accounts = DHLAccount.objects.filter(created_by=request.user)
-    serializer = DHLAccountSerializer(accounts, many=True)
-    return Response(serializer.data)
-
-@api_view(['POST'])
-@permission_classes([IsAuthenticated])
-def dhl_account_create(request):
-    """
-    Crea una nueva cuenta DHL y valida su existencia con DHL
-    """
-    serializer = DHLAccountSerializer(data=request.data, context={'request': request})
-    if serializer.is_valid():
-        # Crear la cuenta primero
-        account = serializer.save()
-        
-        try:
-            # Intentar validar la cuenta con DHL
-            dhl_service = DHLService()
-            is_valid = dhl_service.validate_account(account.account_number)
-            
-            # Actualizar el estado de validación
-            account.last_validated = timezone.now()
-            account.validation_status = 'valid' if is_valid else 'invalid'
-            account.save()
-            
-            if not is_valid:
-                return Response({
-                    'success': False,
-                    'message': 'La cuenta no es válida en DHL',
-                    'account': DHLAccountSerializer(account).data
-                }, status=status.HTTP_400_BAD_REQUEST)
-            
-            return Response({
-                'success': True,
-                'message': 'Cuenta creada y validada correctamente',
-                'account': DHLAccountSerializer(account).data
-            }, status=status.HTTP_201_CREATED)
-            
-        except Exception as e:
-            account.validation_status = 'invalid'
-            account.save()
-            return Response({
-                'success': False,
-                'message': 'Ha ocurrido un error',
-                'account': DHLAccountSerializer(account).data
-            }, status=status.HTTP_400_BAD_REQUEST)
-    
-    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-@api_view(['DELETE'])
-@permission_classes([IsAuthenticated])
-def dhl_account_delete(request, account_id):
-    """
-    Elimina una cuenta DHL
-    """
-    try:
-        account = DHLAccount.objects.get(id=account_id, created_by=request.user)
-        account.delete()
-        return Response({
-            'success': True,
-            'message': 'Cuenta eliminada correctamente'
-        })
-    except DHLAccount.DoesNotExist:
-        return Response({
-            'success': False,
-            'message': 'Cuenta no encontrada'
-        }, status=status.HTTP_404_NOT_FOUND)
-
-@api_view(['POST'])
-@permission_classes([IsAuthenticated])
-def dhl_account_set_default(request, account_id):
-    """
-    Establece una cuenta como predeterminada
-    """
-    try:
-        account = DHLAccount.objects.get(id=account_id, created_by=request.user)
-        account.is_default = True
-        account.save()  # Esto activará el save() personalizado que desactiva otros defaults
-        return Response({
-            'success': True,
-            'message': 'Cuenta establecida como predeterminada',
-            'account': DHLAccountSerializer(account).data
-        })
-    except DHLAccount.DoesNotExist:
-        return Response({
-            'success': False,
-            'message': 'Cuenta no encontrada'
-        }, status=status.HTTP_404_NOT_FOUND)
-
-
-@api_view(['GET'])
-@permission_classes([AllowAny])
-def field_info(request):
-    """
-    Endpoint para obtener información de tooltips y validaciones de campos
-    
-    **Método HTTP:** GET
-    **Permisos:** Público (AllowAny)
-    
-    **Respuesta exitosa (200):**
-    ```json
-    {
-        "field_info": {
-            "origin": {
-                "description": "Dirección de origen del envío",
-                "example": "{\"country\": \"PA\", \"city\": \"Panama City\", \"postal_code\": \"0816\"}"
-            },
-            ...
-        },
-        "limits": {
-            "max_name_length": 512,
-            "max_description_length": 255,
-            ...
-        },
-        "valid_values": {
-            "currencies": ["USD", "EUR", "GBP", ...],
-            "service_types": ["P", "D"],
-            ...
-        }
-    }
-    ```
-    
-    **Casos de uso:**
-    - Mostrar tooltips en formularios del frontend
-    - Validación en tiempo real en el cliente
-    - Documentación automática de campos
-    """
-    try:
-        return Response({
-            'success': True,
-            'field_info': LandedCostValidator.get_all_field_info(),
-            'limits': LandedCostValidator.get_field_limits(),
-            'valid_values': LandedCostValidator.get_valid_values()
-        }, status=status.HTTP_200_OK)
-    
-    except Exception as e:
-        logger.error(f"Error obteniendo información de campos: {str(e)}")
-        return Response({
-            'success': False,
-            'message': 'Ha ocurrido un error',
-            'error': str(e)
-        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-
-@api_view(['GET'])
-@permission_classes([AllowAny])
-def field_info_specific(request, field_name):
-    """
-    Endpoint para obtener información específica de un campo
-    
-    **Método HTTP:** GET
-    **Permisos:** Público (AllowAny)
-    **Parámetros URL:** field_name (string) - Nombre del campo
-    
-    **Respuesta exitosa (200):**
-    ```json
-    {
-        "success": true,
-        "field_name": "description",
-        "info": {
-            "description": "Descripción completa del producto",
-            "example": "KNITWEAR 100% COTTON REDUCTION PRICE FALL COLLECTION"
-        }
-    }
-    ```
-    
-    **Respuesta campo no encontrado (404):**
-    ```json
-    {
-        "success": false,
-        "message": "Campo no encontrado"
-    }
-    ```
-    """
-    try:
-        info = LandedCostValidator.get_field_info(field_name)
-        if info:
-            return Response({
-                'success': True,
-                'field_name': field_name,
-                'info': info
-            }, status=status.HTTP_200_OK)
-        else:
-            return Response({
-                'success': False,
-                'message': 'Campo no encontrado'
-            }, status=status.HTTP_404_NOT_FOUND)
-    
-    except Exception as e:
-        logger.error(f"Error obteniendo información del campo {field_name}: {str(e)}")
-        return Response({
-            'success': False,
-            'message': 'Ha ocurrido un error',
-            'error': str(e)
-        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-
-@api_view(['GET'])
-@permission_classes([IsAuthenticated])
-def user_activities_view(request):
-    """
-    Endpoint para obtener el historial de actividades de usuarios.
-    
-    Permite ver las actividades de todos los usuarios (para admins) o solo las del 
-    usuario actual. Incluye filtros por usuario, acción, estado, fechas, etc.
-    
-    **Método HTTP:** GET
-    **Permisos:** Usuario autenticado
-    
-    **Parámetros de consulta:**
-    - `user_id` (int, opcional): ID del usuario específico
-    - `username` (str, opcional): Nombre de usuario específico
-    - `action` (str, opcional): Tipo de acción (login, create_shipment, etc.)
-    - `status` (str, opcional): Estado (success, error, warning, info)
-    - `date_from` (datetime, opcional): Fecha inicio (YYYY-MM-DD HH:MM:SS)
-    - `date_to` (datetime, opcional): Fecha fin (YYYY-MM-DD HH:MM:SS)
-    - `resource_type` (str, opcional): Tipo de recurso (shipment, account, etc.)
-    - `page` (int, opcional): Número de página (default: 1)
-    - `page_size` (int, opcional): Elementos por página (default: 20, max: 100)
-    
-    **Respuesta exitosa (200):**
-    ```json
-    {
-        "success": true,
-        "data": {
-            "activities": [
-                {
-                    "id": 1,
-                    "user": {
-                        "id": 1,
-                        "username": "admin",
-                        "email": "admin@example.com"
-                    },
-                    "action": "login",
-                    "action_display": "Inicio de sesión",
-                    "status": "success",
-                    "status_display": "Exitoso",
-                    "description": "Usuario inició sesión correctamente",
-                    "ip_address": "192.168.1.100",
-                    "resource_type": null,
-                    "resource_id": null,
-                    "created_at": "2025-08-02T10:30:00Z",
-                    "created_at_formatted": "02/08/2025 10:30:00"
-                }
-            ],
-            "pagination": {
-                "current_page": 1,
-                "total_pages": 5,
-                "total_items": 100,
-                "page_size": 20,
-                "has_next": true,
-                "has_previous": false
-            },
-            "filters": {
-                "actions": [
-                    {"value": "login", "label": "Inicio de sesión"},
-                    {"value": "create_shipment", "label": "Crear envío"}
-                ],
-                "statuses": [
-                    {"value": "success", "label": "Exitoso"},
-                    {"value": "error", "label": "Error"}
-                ]
-            }
-        }
-    }
-    ```
-    """
-    try:
-        # Validar filtros de entrada
-        filter_serializer = UserActivityFilterSerializer(data=request.GET)
-        if not filter_serializer.is_valid():
-            return Response({
-                'success': False,
-                'message': 'Ha ocurrido un error',
-                'errors': filter_serializer.errors
-            }, status=status.HTTP_400_BAD_REQUEST)
-        
-        filters = filter_serializer.validated_data
-        
-        # Construir queryset base
-        queryset = UserActivity.objects.select_related('user').all()
-        
-        # Aplicar filtros de permisos
-        # Si no es superuser, solo puede ver sus propias actividades
-        if not request.user.is_superuser:
-            queryset = queryset.filter(user=request.user)
-        
-        # Aplicar filtros adicionales
-        if filters.get('user_id'):
-            queryset = queryset.filter(user_id=filters['user_id'])
-        
-        if filters.get('username'):
-            queryset = queryset.filter(user__username__icontains=filters['username'])
-        
-        if filters.get('action'):
-            queryset = queryset.filter(action=filters['action'])
-        
-        if filters.get('status'):
-            queryset = queryset.filter(status=filters['status'])
-        
-        if filters.get('date_from'):
-            queryset = queryset.filter(created_at__gte=filters['date_from'])
-        
-        if filters.get('date_to'):
-            queryset = queryset.filter(created_at__lte=filters['date_to'])
-        
-        if filters.get('resource_type'):
-            queryset = queryset.filter(resource_type__icontains=filters['resource_type'])
-        
-        # Paginación
-        page = filters.get('page', 1)
-        page_size = filters.get('page_size', 20)
-        paginator = Paginator(queryset, page_size)
-        
-        try:
-            activities_page = paginator.page(page)
-        except:
-            activities_page = paginator.page(1)
-        
-        # Serializar actividades
-        serializer = UserActivitySerializer(activities_page.object_list, many=True)
-        
-        # Preparar opciones para filtros en frontend
-        filter_options = {
-            'actions': [{'value': choice[0], 'label': choice[1]} for choice in UserActivity.ACTION_CHOICES],
-            'statuses': [{'value': choice[0], 'label': choice[1]} for choice in UserActivity.STATUS_CHOICES]
-        }
-        
-        # Registrar esta consulta como actividad
-        UserActivity.log_activity(
-            user=request.user,
-            action='system_action',
-            description=f'Consultó historial de actividades (página {page})',
-            ip_address=request.META.get('REMOTE_ADDR'),
-            user_agent=request.META.get('HTTP_USER_AGENT'),
-            metadata={'filters': filters}
-        )
-        
-        return Response({
-            'success': True,
-            'data': {
-                'activities': serializer.data,
-                'pagination': {
-                    'current_page': activities_page.number,
-                    'total_pages': paginator.num_pages,
-                    'total_items': paginator.count,
-                    'page_size': page_size,
-                    'has_next': activities_page.has_next(),
-                    'has_previous': activities_page.has_previous()
-                },
-                'filters': filter_options
-            }
-        }, status=status.HTTP_200_OK)
-        
-    except Exception as e:
-        logger.error(f"Error obteniendo actividades de usuario: {str(e)}")
-        return Response({
-            'success': False,
-            'message': 'Ha ocurrido un error',
-            'error': str(e)
-        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-
-@api_view(['GET'])
-@permission_classes([IsAuthenticated])
-def user_activity_stats_view(request):
-    """
-    Endpoint para obtener estadísticas de actividades de usuario.
-    
-    Proporciona métricas y resúmenes sobre las actividades de usuarios,
-    útil para dashboards administrativos.
-    
-    **Método HTTP:** GET
-    **Permisos:** Usuario autenticado (superuser para estadísticas globales)
-    
-    **Parámetros de consulta:**
-    - `days` (int, opcional): Número de días atrás para las estadísticas (default: 30)
-    - `user_id` (int, opcional): ID de usuario específico (solo superuser)
-    
-    **Respuesta exitosa (200):**
-    ```json
-    {
-        "success": true,
-        "data": {
-            "summary": {
-                "total_activities": 156,
-                "unique_users": 12,
-                "success_rate": 98.5,
-                "most_common_action": "login",
-                "period_days": 30
-            },
-            "by_action": {
-                "login": 45,
-                "create_shipment": 23,
-                "get_rate": 18
-            },
-            "by_status": {
-                "success": 150,
-                "error": 4,
-                "warning": 2
-            },
-            "by_day": [
-                {"date": "2025-08-01", "count": 12},
-                {"date": "2025-08-02", "count": 8}
-            ],
-            "top_users": [
-                {"username": "admin", "activity_count": 45},
-                {"username": "user1", "activity_count": 23}
-            ]
-        }
-    }
-    ```
-    """
-    try:
-        days = int(request.GET.get('days', 30))
-        user_id = request.GET.get('user_id')
-        
-        # Validar permisos
-        if user_id and not request.user.is_superuser:
-            return Response({
-                'success': False,
-                'message': 'No tienes permisos para ver estadísticas de otros usuarios'
-            }, status=status.HTTP_403_FORBIDDEN)
-        
-        # Fecha límite
-        from datetime import timedelta
-        date_limit = timezone.now() - timedelta(days=days)
-        
-        # Construir queryset base
-        queryset = UserActivity.objects.filter(created_at__gte=date_limit)
-        
-        if user_id:
-            queryset = queryset.filter(user_id=user_id)
-        elif not request.user.is_superuser:
-            queryset = queryset.filter(user=request.user)
-        
-        # Estadísticas básicas
-        from django.db.models import Count, Q
-        from collections import Counter
-        
-        total_activities = queryset.count()
-        unique_users = queryset.values('user').distinct().count()
-        success_count = queryset.filter(status='success').count()
-        success_rate = (success_count / total_activities * 100) if total_activities > 0 else 0
-        
-        # Acción más común
-        action_counts = queryset.values('action').annotate(count=Count('action')).order_by('-count')
-        most_common_action = action_counts.first()['action'] if action_counts else None
-        
-        # Estadísticas por acción
-        by_action = {item['action']: item['count'] for item in action_counts}
-        
-        # Estadísticas por estado
-        status_counts = queryset.values('status').annotate(count=Count('status'))
-        by_status = {item['status']: item['count'] for item in status_counts}
-        
-        # Actividades por día (últimos días)
-        from django.db.models.functions import TruncDate
-        daily_counts = (queryset
-                       .annotate(date=TruncDate('created_at'))
-                       .values('date')
-                       .annotate(count=Count('id'))
-                       .order_by('date'))
-        
-        by_day = [
-            {
-                'date': item['date'].strftime('%Y-%m-%d'),
-                'count': item['count']
-            }
-            for item in daily_counts
+        logger.info(f"Pickup request from user: {request.user.username}")
+        
+        # Obtener datos del request
+        pickup_data = request.data.copy()
+        
+        # Validar campos requeridos
+        required_fields = [
+            'plannedPickupDateAndTime',
+            'account_number',
+            'shipper',
+            'receiver',
+            'bookingRequestor',
+            'pickupDetails'
         ]
         
-        # Top usuarios (solo para superuser)
-        top_users = []
-        if request.user.is_superuser:
-            user_counts = (queryset
-                          .values('user__username')
-                          .annotate(activity_count=Count('id'))
-                          .order_by('-activity_count')[:10])
-            top_users = [
-                {
-                    'username': item['user__username'],
-                    'activity_count': item['activity_count']
-                }
-                for item in user_counts
-            ]
+        is_valid, errors = validate_required_fields(pickup_data, required_fields)
+        if not is_valid:
+            return Response({
+                'success': False,
+                'error': 'Campos requeridos faltantes',
+                'details': errors
+            }, status=status.HTTP_400_BAD_REQUEST)
         
-        # Registrar esta consulta
-        UserActivity.log_activity(
-            user=request.user,
+        # Obtener instancia del servicio DHL
+        dhl_service = DHLService(
+            username=settings.DHL_USERNAME,
+            password=settings.DHL_PASSWORD,
+            base_url=settings.DHL_BASE_URL
+        )
+        
+        # Crear la recogida
+        result = dhl_service.create_pickup(pickup_data)
+        
+        if result.get('success'):
+            # Log de actividad del usuario
+            UserActivity.objects.create(
+                user=request.user,
+                action='system_action',
+                description=f"Pickup creado: {result.get('dispatch_confirmation_number', 'N/A')}",
+                ip_address=get_client_ip(request),
+                user_agent=request.META.get('HTTP_USER_AGENT', ''),
+                status='success'
+            )
+            
+            return Response({
+                'success': True,
+                'message': result.get('message', 'Recogida creada exitosamente'),
+                'data': {
+                    'dispatch_confirmation_number': result.get('dispatch_confirmation_number', ''),
+                    'pickup_info': result.get('pickup_info', {}),
+                    'raw_response': result.get('pickup_data', {})
+                }
+            }, status=status.HTTP_201_CREATED)
+        else:
+            # Log de error con detalles completos
+            logger.error(f"Error al crear pickup - Respuesta completa de DHL: {result}")
+            
+            UserActivity.objects.create(
+                user=request.user,
+                action='api_error',
+                description=f"Error al crear pickup: {result.get('error', 'Unknown error')}",
+                ip_address=get_client_ip(request),
+                user_agent=request.META.get('HTTP_USER_AGENT', ''),
+                status='error'
+            )
+            
+            return Response({
+                'success': False,
+                'error': result.get('error', 'Error desconocido'),
+                'error_code': result.get('error_code', 'UNKNOWN_ERROR'),
+                'details': result.get('details', ''),
+                'raw_response': result.get('raw_response', '')
+            }, status=status.HTTP_400_BAD_REQUEST)
+            
+    except Exception as e:
+        logger.error(f"Error en pickup_view: {str(e)}")
+        
+        # Log de error del sistema
+        UserActivity.objects.create(
+            user=request.user if request.user.is_authenticated else None,
             action='system_action',
-            description=f'Consultó estadísticas de actividades ({days} días)',
-            ip_address=request.META.get('REMOTE_ADDR'),
-            user_agent=request.META.get('HTTP_USER_AGENT'),
-            metadata={'days': days, 'user_id': user_id}
+            description=f"Error del sistema: {str(e)}",
+            ip_address=get_client_ip(request),
+            user_agent=request.META.get('HTTP_USER_AGENT', ''),
+            status='error'
         )
         
         return Response({
-            'success': True,
-            'data': {
-                'summary': {
-                    'total_activities': total_activities,
-                    'unique_users': unique_users,
-                    'success_rate': round(success_rate, 2),
-                    'most_common_action': most_common_action,
-                    'period_days': days
-                },
-                'by_action': by_action,
-                'by_status': by_status,
-                'by_day': by_day,
-                'top_users': top_users
-            }
-        }, status=status.HTTP_200_OK)
-        
-    except Exception as e:
-        logger.error(f"Error obteniendo estadísticas de actividades: {str(e)}")
-        return Response({
             'success': False,
-            'message': 'Ha ocurrido un error',
-            'error': str(e)
+            'error': 'Error interno del servidor',
+            'details': str(e)
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+def get_client_ip(request):
+    """
+    Obtiene la IP del cliente desde la solicitud
+    
+    Args:
+        request: Objeto de solicitud HTTP
+        
+    Returns:
+        str: IP del cliente
+    """
+    x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
+    if x_forwarded_for:
+        ip = x_forwarded_for.split(',')[0]
+    else:
+        ip = request.META.get('REMOTE_ADDR')
+    return ip
 
 
 # ============================================================================
@@ -3563,6 +1736,7 @@ def get_cities_by_country_state(request, country_code, state_code=None):
     """
     try:
         from .models import ServiceAreaCityMap, ServiceZone
+        from .serializers import CitySerializer
 
         prefer = (request.GET.get('prefer') or '').strip().lower()
         allowed = {'', 'city_name', 'service_area', 'map'}
@@ -3682,190 +1856,33 @@ def get_service_areas_by_location(request, country_code):
     """
     try:
         from .models import ServiceAreaCityMap
-        from .serializers import ServiceAreaSerializer
-        from django.db.models import Q
-
-        state_code = request.GET.get('state_code')
-        city_name = request.GET.get('city_name')
-
-        cc = country_code.upper()
-        sc = state_code.upper() if state_code else None
-
-        qs = ServiceAreaCityMap.objects.filter(country_code=cc)
-        if sc and cc != 'CA':
-            qs = qs.filter(state_code=sc)
-        if city_name:
-            qs = qs.filter(Q(city_name__iexact=city_name) | Q(display_name__icontains=city_name))
-
-        codes = (
-            qs.exclude(service_area__isnull=True)
-              .exclude(service_area='')
-              .values('service_area', 'display_name')
-              .distinct()
-        )
-
-        enriched = []
-        seen = set()
-        for row in codes:
-            code = row.get('service_area')
-            disp = row.get('display_name') or code
-            if not code or code in seen:
-                continue
-            seen.add(code)
-            enriched.append({'service_area': code, 'display_name': disp})
-
-        # Asegurar unicidad de display_name
-        counts = {}
-        for item in enriched:
-            counts[item['display_name']] = counts.get(item['display_name'], 0) + 1
-        for item in enriched:
-            if counts.get(item['display_name'], 0) > 1:
-                item['display_name'] = f"{item['display_name']} - {item['service_area']}"
-
-        serializer = ServiceAreaSerializer(enriched, many=True)
-        
-        return Response({
-            'success': True,
-            'message': 'Áreas de servicio obtenidas exitosamente',
-            'data': serializer.data,
-            'count': len(serializer.data),
-            'filters': {
-                'country_code': country_code.upper(),
-                'state_code': state_code.upper() if state_code else None,
-                'city_name': city_name
-            }
-        }, status=status.HTTP_200_OK)
-        
-    except Exception as e:
-        logger.error(f"Error obteniendo áreas de servicio: {str(e)}")
-        return Response({
-            'success': False,
-            'message': 'Ha ocurrido un error',
-            'error': str(e)
-        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-
-def get_city_service_area_mapping(country_code, city_name):
-    """
-    Obtiene el área de servicio correcta para una ciudad específica basado en:
-    1. Análisis de densidad y continuidad de códigos postales
-    2. El área de servicio que tenga más códigos postales válidos (no vacíos)
-    3. Si hay empate, el que tenga códigos postales con patrones más consistentes
-    """
-    from django.db.models import Count, Min, Max, Q
-    from .models import ServiceAreaCityMap
-    
-    # Análisis avanzado por densidad de códigos postales
-    areas_analysis = ServiceAreaCityMap.objects.filter(
-        country_code=country_code.upper(),
-        city_name__iexact=city_name
-    ).exclude(
-        Q(postal_code_from='') | Q(postal_code_to='') |
-        Q(postal_code_from__isnull=True) | Q(postal_code_to__isnull=True)
-    ).values('service_area').annotate(
-        code_count=Count('postal_code_from', distinct=True),
-        min_code=Min('postal_code_from'),
-        max_code=Max('postal_code_from')
-    )
-    
-    if not areas_analysis.exists():
-        # Si no hay códigos postales, usar el área más común sin filtrar
-        fallback_mapping = ServiceAreaCityMap.objects.filter(
-            country_code=country_code.upper(),
-            city_name__iexact=city_name
-        ).values('service_area').annotate(
-            count=Count('service_area')
-        ).order_by('-count').first()
-        
-        return fallback_mapping['service_area'] if fallback_mapping else None
-    
-    # Calcular score de calidad para cada service_area
-    best_area = None
-    best_score = 0
-    
-    for area in areas_analysis:
-        service_area = area['service_area']
-        code_count = area['code_count']
-        min_code = area['min_code']
-        max_code = area['max_code']
-        
-        # Score basado en cantidad de códigos postales
-        score = code_count
-        
-        # Bonus para áreas con más de 10 códigos (consideradas primarias)
-        if code_count >= 10:
-            score += 50
-        
-        # Bonus por continuidad de códigos postales (rango compacto)
-        if min_code and max_code and min_code.isdigit() and max_code.isdigit():
-            try:
-                range_size = int(max_code) - int(min_code) + 1
-                density = code_count / range_size if range_size > 0 else 0
-                if density > 0.5:  # Más del 50% del rango está cubierto
-                    score += 30
-            except (ValueError, TypeError):
-                pass
-        
-        # Bonus por códigos con patrones consistentes (mismo prefijo)
-        if min_code and max_code and len(min_code) == len(max_code):
-            if len(min_code) >= 3 and min_code[:3] == max_code[:3]:
-                score += 20  # Mismo prefijo de 3 dígitos
-        
-        if score > best_score:
-            best_score = score
-            best_area = service_area
-    
-    return best_area if best_area else areas_analysis.first()['service_area']
-
-
-@api_view(['GET'])
-@permission_classes([AllowAny])
-@cache_page(60 * 15)  # Cache por 15 minutos
-def get_postal_codes_by_location(request, country_code):
-    try:
-        from .models import ServiceAreaCityMap, ServiceZone
-        from .serializers import PostalCodeSerializer
+        from .serializers import ServiceAreaSerializer, PostalCodeSerializer
         from django.db.models import Q, Count
 
         state_code = request.GET.get('state_code')
         city_name = request.GET.get('city_name')
         service_area = request.GET.get('service_area')
         page = int(request.GET.get('page', 1))
-        page_size = min(int(request.GET.get('page_size', 100)), 1000)
+        page_size = min(int(request.GET.get('page_size', 100)), 200)
         limit = int(request.GET.get('limit', 5000))
 
-        cc = country_code.upper()
-        sc = state_code.upper() if state_code else None
-        sa = service_area.upper() if service_area else None
+        qs = ServiceAreaCityMap.objects.filter(country_code=country_code.upper())
+        if state_code and country_code != 'CA':
+            qs = qs.filter(state_code=state_code.upper())
 
-        qs = ServiceAreaCityMap.objects.filter(country_code=cc)
-        if sc and cc != 'CA':
-            qs = qs.filter(state_code=sc)
-        
-        # Filtrado mejorado por ciudad con validación de área de servicio
         if city_name:
-            # Buscar el área de servicio correcta para esta ciudad
-            correct_service_area = get_city_service_area_mapping(cc, city_name)
+            correct_service_area = get_city_service_area_mapping(country_code, city_name)
             if correct_service_area:
-                # Filtrar por ciudad Y área de servicio correcta
                 qs = qs.filter(
                     Q(city_name__iexact=city_name) | Q(display_name__icontains=city_name),
                     service_area=correct_service_area
                 )
             else:
-                # Si no hay mapeo claro, usar filtro tradicional pero con advertencia
                 qs = qs.filter(Q(city_name__iexact=city_name) | Q(display_name__icontains=city_name))
-        
-        if sa:
-            qs = qs.filter(service_area=sa)
-        qs = qs.exclude(postal_code_from='').exclude(postal_code_to='')
 
-        total = qs.count()
-        total_limited = min(total, limit)
-        total_pages = (total_limited + page_size - 1) // page_size
-        page = max(1, min(page, total_pages or 1))
-        start = (page - 1) * page_size
-        end = start + page_size
+        if service_area:
+            qs = qs.filter(service_area=service_area.upper())
+        qs = qs.exclude(postal_code_from='').exclude(postal_code_to='')
 
         # Base: datos desde ServiceAreaCityMap
         rows_all = list(qs.order_by('postal_code_from')[:limit])
@@ -3880,13 +1897,11 @@ def get_postal_codes_by_location(request, country_code):
 
         # Fallback/append: complementar con rangos desde ServiceZone (ESD)
         try:
-            # Para ESD, aplicar el mismo filtro de área de servicio si se especificó ciudad
-            if city_name and not sa:
-                correct_service_area = get_city_service_area_mapping(cc, city_name)
-                esd_qs = ServiceZone.get_postal_codes_by_location(cc, sc, city_name, correct_service_area)
+            if city_name and not service_area:
+                correct_service_area = get_city_service_area_mapping(country_code, city_name)
+                esd_qs = ServiceZone.get_postal_codes_by_location(country_code, state_code, city_name, correct_service_area)
             else:
-                esd_qs = ServiceZone.get_postal_codes_by_location(cc, sc, city_name, sa)
-            # Convertir a lista de dicts similares
+                esd_qs = ServiceZone.get_postal_codes_by_location(country_code, state_code, city_name, service_area)
             esd_list = list(esd_qs)
         except Exception:
             esd_list = []
@@ -3894,26 +1909,18 @@ def get_postal_codes_by_location(request, country_code):
         # Unificar y deduplicar por (from,to,service_area)
         seen = set()
         unified = []
-        
-        # Obtener el área de servicio correcta para validación adicional
-        city_correct_area = None
-        if city_name:
-            city_correct_area = get_city_service_area_mapping(cc, city_name)
-        
+        city_correct_area = get_city_service_area_mapping(country_code, city_name) if city_name else None
         for item in data_all + esd_list:
             f = (item.get('postal_code_from') or '').strip()
             t = (item.get('postal_code_to') or '').strip()
             s = (item.get('service_area') or '').strip().upper()
-            key = (f, t, s)
             if not f or not t:
                 continue
+            key = (f, t, s)
             if key in seen:
                 continue
-            
-            # Validación adicional: si se especificó ciudad, solo incluir códigos del área correcta
             if city_name and city_correct_area and s != city_correct_area:
                 continue
-            
             seen.add(key)
             unified.append({'postal_code_from': f, 'postal_code_to': t, 'service_area': s})
 
@@ -3928,16 +1935,20 @@ def get_postal_codes_by_location(request, country_code):
         data = unified[start:end]
         serializer = PostalCodeSerializer(data, many=True)
 
-        # Debug info si se solicita
+        # Debug info opcional
         debug_info = {}
         if request.GET.get('debug') == '1' and city_name:
-            correct_area = get_city_service_area_mapping(cc, city_name)
+            correct_area = get_city_service_area_mapping(country_code, city_name)
             debug_info = {
                 'detected_service_area': correct_area,
                 'filter_applied': bool(correct_area),
                 'total_before_filter': len(data_all + esd_list),
                 'total_after_filter': len(unified)
             }
+
+        # Metadatos
+        cc = (country_code or '').upper()
+        sc = (state_code or '').upper() if state_code else ''
 
         response_data = {
             'success': True,
@@ -3951,14 +1962,13 @@ def get_postal_codes_by_location(request, country_code):
                 'country_code': cc,
                 'state_code': sc,
                 'city_name': city_name,
-                'service_area': sa
+                'service_area': service_area
             },
             'source': 'Map+ESD'
         }
-        
         if debug_info:
             response_data['debug'] = debug_info
-            
+
         return Response(response_data, status=status.HTTP_200_OK)
 
     except ValueError as e:
@@ -4194,8 +2204,9 @@ def resolve_service_area_display(request):
       - fallback_city (opcional)
     """
     try:
+        from django.db.models import Q
         from .models import ServiceAreaCityMap
-
+        
         country_code = (request.GET.get('country_code') or '').upper().strip()
         service_area = (request.GET.get('service_area') or '').upper().strip()
         postal_code = request.GET.get('postal_code')
@@ -4208,25 +2219,62 @@ def resolve_service_area_display(request):
                 'message': 'country_code y service_area son requeridos'
             }, status=status.HTTP_400_BAD_REQUEST)
 
-        result = ServiceAreaCityMap.resolve_display(
+        # 1. Intentar resolver directamente el nombre del área de servicio
+        direct_match = ServiceAreaCityMap.objects.filter(
             country_code=country_code,
-            service_area=service_area,
-            postal_code=postal_code,
-            state_code=state_code,
-            fallback_city=fallback_city,
-        )
+            service_area=service_area
+        ).first()
 
+        if direct_match:
+            return Response({
+                'success': True,
+                'service_area': direct_match.service_area,
+                'display_name': direct_match.display_name or direct_match.service_area,
+                'type': 'direct'
+            }, status=status.HTTP_200_OK)
+
+        # 2. Si no hay coincidencia directa, intentar con city_name como fallback
+        if fallback_city:
+            city_fallback = ServiceAreaCityMap.objects.filter(
+                country_code=country_code,
+                city_name__iexact=fallback_city
+            ).first()
+
+            if city_fallback:
+                return Response({
+                    'success': True,
+                    'service_area': city_fallback.service_area,
+                    'display_name': city_fallback.display_name or city_fallback.service_area,
+                    'type': 'fallback_city'
+                }, status=status.HTTP_200_OK)
+
+        # 3. Si aún no hay coincidencia, buscar por patrones en postal_code
+        if postal_code:
+            postal_fallback = ServiceAreaCityMap.objects.filter(
+                country_code=country_code,
+                postal_code_from__lte=postal_code,
+                postal_code_to__gte=postal_code
+            ).first()
+
+            if postal_fallback:
+                return Response({
+                    'success': True,
+                    'service_area': postal_fallback.service_area,
+                    'display_name': postal_fallback.display_name or postal_fallback.service_area,
+                    'type': 'fallback_postal'
+                }, status=status.HTTP_200_OK)
+
+        # 4. Si no se encuentra nada, devolver error amigable
         return Response({
-            'success': True,
-            'data': result,
-            'inputs': {
-                'country_code': country_code,
-                'service_area': service_area,
-                'postal_code': postal_code,
-                'state_code': state_code,
-                'fallback_city': fallback_city,
-            }
-        })
+            'success': False,
+            'message': f'No se pudo determinar el área de servicio para {service_area}',
+            'country_code': country_code,
+            'service_area': service_area,
+            'postal_code': postal_code,
+            'state_code': state_code,
+            'fallback_city': fallback_city
+        }, status=status.HTTP_404_NOT_FOUND)
+    
     except Exception as e:
         logger.error(f"Error resolviendo display de service_area: {str(e)}")
         return Response({
@@ -4291,22 +2339,25 @@ def test_city_service_area_mapping(request, country_code, city_name):
     try:
         from django.db.models import Count, Q
         from .models import ServiceAreaCityMap
-        
+
         # Mostrar todas las áreas de servicio para esta ciudad
         all_mappings = ServiceAreaCityMap.objects.filter(
             country_code=country_code.upper(),
             city_name__iexact=city_name
         ).values('service_area').annotate(
             total_count=Count('service_area'),
-            valid_postal_count=Count('postal_code_from', filter=Q(
-                postal_code_from__isnull=False, 
-                postal_code_to__isnull=False
-            ) & ~Q(postal_code_from='') & ~Q(postal_code_to=''))
+            valid_postal_count=Count(
+                'postal_code_from',
+                filter=Q(
+                    postal_code_from__isnull=False,
+                    postal_code_to__isnull=False
+                ) & ~Q(postal_code_from='') & ~Q(postal_code_to='')
+            ),
         ).order_by('-valid_postal_count', '-total_count')
-        
-        # Usar la función de mapeo
+
+        # Usar la función de mapeo (con fallback a None si no implementado)
         correct_area = get_city_service_area_mapping(country_code, city_name)
-        
+
         return Response({
             'success': True,
             'city': city_name,
@@ -4315,8 +2366,9 @@ def test_city_service_area_mapping(request, country_code, city_name):
             'all_mappings': list(all_mappings),
             'message': f'Área de servicio correcta para {city_name}: {correct_area}'
         }, status=status.HTTP_200_OK)
-        
+
     except Exception as e:
+        logger.error(f"Error en test_city_service_area_mapping: {e}")
         return Response({
             'success': False,
             'error': str(e)
@@ -4332,7 +2384,7 @@ def debug_city_analysis(request, country_code, city_name):
     try:
         from django.db.models import Count, Min, Max, Q
         from .models import ServiceAreaCityMap
-        
+
         # Análisis detallado por service_area
         areas_analysis = ServiceAreaCityMap.objects.filter(
             country_code=country_code.upper(),
@@ -4345,7 +2397,7 @@ def debug_city_analysis(request, country_code, city_name):
             min_code=Min('postal_code_from'),
             max_code=Max('postal_code_from')
         )
-        
+
         debug_info = []
         best_area = None
         best_score = 0
@@ -4371,8 +2423,6 @@ def debug_city_analysis(request, country_code, city_name):
                     if density > 0.5:
                         score += 30
                         score_breakdown['continuity_bonus'] = 30
-                    score_breakdown['density'] = density
-                    score_breakdown['range_size'] = range_size
                 except (ValueError, TypeError):
                     pass
             
@@ -4424,4 +2474,571 @@ def debug_city_analysis(request, country_code, city_name):
         return Response({
             'success': False,
             'error': str(e)
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def tracking_view(request):
+    """Vista para tracking de envíos DHL"""
+    try:
+        serializer = TrackingRequestSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response({
+                'success': False,
+                'errors': serializer.errors
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        tracking_number = serializer.validated_data['tracking_number']
+        
+        # Usar el servicio DHL para obtener tracking
+        dhl_service = DHLService()
+        result = dhl_service.get_tracking(tracking_number)
+        
+        if result.get('success'):
+            return Response({
+                'success': True,
+                'data': result.get('data', {}),
+                'message': 'Tracking obtenido exitosamente'
+            }, status=status.HTTP_200_OK)
+        else:
+            return Response({
+                'success': False,
+                'error': result.get('message', 'Error al obtener tracking')
+            }, status=status.HTTP_400_BAD_REQUEST)
+            
+    except Exception as e:
+        logger.error(f"Error en tracking_view: {str(e)}")
+        return Response({
+            'success': False,
+            'error': 'Error interno del servidor'
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def epod_view(request):
+    """Vista para obtener Proof of Delivery (EPOD)"""
+    try:
+        serializer = EPODRequestSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response({
+                'success': False,
+                'errors': serializer.errors
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        shipment_id = serializer.validated_data['shipment_id']
+        
+        # Usar el servicio DHL para obtener EPOD
+        dhl_service = DHLService()
+        result = dhl_service.get_epod(shipment_id)
+        
+        if result.get('success'):
+            return Response({
+                'success': True,
+                'data': result.get('data', {}),
+                'message': 'EPOD obtenido exitosamente'
+            }, status=status.HTTP_200_OK)
+        else:
+            return Response({
+                'success': False,
+                'error': result.get('message', 'Error al obtener EPOD')
+            }, status=status.HTTP_400_BAD_REQUEST)
+            
+    except Exception as e:
+        logger.error(f"Error en epod_view: {str(e)}")
+        return Response({
+            'success': False,
+            'error': 'Error interno del servidor'
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def shipment_view(request):
+    """Vista para crear envíos DHL"""
+    try:
+        serializer = ShipmentRequestSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response({
+                'success': False,
+                'errors': serializer.errors
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        # Usar el servicio DHL para crear envío
+        dhl_service = DHLService()
+        result = dhl_service.create_shipment(serializer.validated_data)
+        
+        if result.get('success'):
+            return Response({
+                'success': True,
+                'data': result.get('data', {}),
+                'message': 'Envío creado exitosamente'
+            }, status=status.HTTP_201_CREATED)
+        else:
+            return Response({
+                'success': False,
+                'error': result.get('message', 'Error al crear envío')
+            }, status=status.HTTP_400_BAD_REQUEST)
+            
+    except Exception as e:
+        logger.error(f"Error en shipment_view: {str(e)}")
+        return Response({
+            'success': False,
+            'error': 'Error interno del servidor'
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def shipments_list_view(request):
+    """Vista para listar envíos"""
+    try:
+        page = request.GET.get('page', 1)
+        page_size = request.GET.get('page_size', 20)
+        
+        shipments = Shipment.objects.filter(user=request.user).order_by('-created_at')
+        paginator = Paginator(shipments, page_size)
+        
+        try:
+            shipments_page = paginator.page(page)
+        except:
+            shipments_page = paginator.page(1)
+        
+        serializer = ShipmentSerializer(shipments_page, many=True)
+        
+        return Response({
+            'success': True,
+            'data': serializer.data,
+            'pagination': {
+                'page': shipments_page.number,
+                'total_pages': paginator.num_pages,
+                'total_items': paginator.count,
+                'has_next': shipments_page.has_next(),
+                'has_previous': shipments_page.has_previous()
+            }
+        }, status=status.HTTP_200_OK)
+        
+    except Exception as e:
+        logger.error(f"Error en shipments_list_view: {str(e)}")
+        return Response({
+            'success': False,
+            'error': 'Error interno del servidor'
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def shipment_detail_view(request, shipment_id):
+    """Vista para obtener detalle de un envío"""
+    try:
+        shipment = Shipment.objects.get(id=shipment_id, user=request.user)
+        serializer = ShipmentSerializer(shipment)
+        
+        return Response({
+            'success': True,
+            'data': serializer.data
+        }, status=status.HTTP_200_OK)
+        
+    except Shipment.DoesNotExist:
+        return Response({
+            'success': False,
+            'error': 'Envío no encontrado'
+        }, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        logger.error(f"Error en shipment_detail_view: {str(e)}")
+        return Response({
+            'success': False,
+            'error': 'Error interno del servidor'
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def rates_history_view(request):
+    """Vista para obtener historial de cotizaciones"""
+    try:
+        page = request.GET.get('page', 1)
+        page_size = request.GET.get('page_size', 20)
+        
+        rates = RateQuote.objects.filter(user=request.user).order_by('-created_at')
+        paginator = Paginator(rates, page_size)
+        
+        try:
+            rates_page = paginator.page(page)
+        except:
+            rates_page = paginator.page(1)
+        
+        serializer = RateQuoteSerializer(rates_page, many=True)
+        
+        return Response({
+            'success': True,
+            'data': serializer.data,
+            'pagination': {
+                'page': rates_page.number,
+                'total_pages': paginator.num_pages,
+                'total_items': paginator.count,
+                'has_next': rates_page.has_next(),
+                'has_previous': rates_page.has_previous()
+            }
+        }, status=status.HTTP_200_OK)
+        
+    except Exception as e:
+        logger.error(f"Error en rates_history_view: {str(e)}")
+        return Response({
+            'success': False,
+            'error': 'Error interno del servidor'
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def dhl_status_view(request):
+    """Vista para verificar estado de servicios DHL"""
+    try:
+        dhl_service = DHLService()
+        status_info = dhl_service.get_status()
+        
+        return Response({
+            'success': True,
+            'data': status_info,
+            'message': 'Estado de servicios DHL obtenido exitosamente'
+        }, status=status.HTTP_200_OK)
+        
+    except Exception as e:
+        logger.error(f"Error en dhl_status_view: {str(e)}")
+        return Response({
+            'success': False,
+            'error': 'Error interno del servidor'
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def validate_shipment_date_view(request):
+    """Vista para validar fechas de envío"""
+    try:
+        shipment_date = request.data.get('shipment_date')
+        if not shipment_date:
+            return Response({
+                'success': False,
+                'error': 'Fecha de envío requerida'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Validar formato de fecha
+        from datetime import datetime
+        try:
+            date_obj = datetime.fromisoformat(shipment_date.replace('Z', '+00:00'))
+        except:
+            return Response({
+                'success': False,
+                'error': 'Formato de fecha inválido'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Validar que no sea fecha pasada
+        now = timezone.now()
+        if date_obj < now:
+            return Response({
+                'success': False,
+                'error': 'La fecha de envío no puede ser en el pasado'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        return Response({
+            'success': True,
+            'message': 'Fecha de envío válida'
+        }, status=status.HTTP_200_OK)
+        
+    except Exception as e:
+        logger.error(f"Error en validate_shipment_date_view: {str(e)}")
+        return Response({
+            'success': False,
+            'error': 'Error interno del servidor'
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def dhl_account_list(request):
+    """Vista para listar cuentas DHL"""
+    try:
+        accounts = DHLAccount.objects.filter(created_by=request.user)
+        serializer = DHLAccountSerializer(accounts, many=True)
+        return Response({
+            'success': True,
+            'data': serializer.data
+        }, status=status.HTTP_200_OK)
+        
+    except Exception as e:
+        logger.error(f"Error en dhl_account_list: {str(e)}")
+        return Response({
+            'success': False,
+            'error': 'Error interno del servidor'
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def dhl_account_create(request):
+    """Vista para crear cuenta DHL"""
+    try:
+        serializer = DHLAccountSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response({
+                'success': False,
+                'errors': serializer.errors
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        account = serializer.save(created_by=request.user)
+        return Response({
+            'success': True,
+            'data': DHLAccountSerializer(account).data,
+            'message': 'Cuenta DHL creada exitosamente'
+        }, status=status.HTTP_201_CREATED)
+        
+    except Exception as e:
+        logger.error(f"Error en dhl_account_create: {str(e)}")
+        return Response({
+            'success': False,
+            'error': 'Error interno del servidor'
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated])
+def dhl_account_delete(request, account_id):
+    """Vista para eliminar cuenta DHL"""
+    try:
+        account = DHLAccount.objects.get(id=account_id, created_by=request.user)
+        account.delete()
+        return Response({
+            'success': True,
+            'message': 'Cuenta DHL eliminada exitosamente'
+        }, status=status.HTTP_200_OK)
+        
+    except DHLAccount.DoesNotExist:
+        return Response({
+            'success': False,
+            'error': 'Cuenta DHL no encontrada'
+        }, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        logger.error(f"Error en dhl_account_delete: {str(e)}")
+        return Response({
+            'success': False,
+            'error': 'Error interno del servidor'
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def dhl_account_set_default(request, account_id):
+    """Vista para establecer cuenta DHL por defecto"""
+    try:
+        DHLAccount.objects.filter(created_by=request.user).update(is_default=False)
+        account = DHLAccount.objects.get(id=account_id, created_by=request.user)
+        account.is_default = True
+        account.save()
+        return Response({
+            'success': True,
+            'message': 'Cuenta DHL establecida como por defecto'
+        }, status=status.HTTP_200_OK)
+        
+    except DHLAccount.DoesNotExist:
+        return Response({
+            'success': False,
+            'error': 'Cuenta DHL no encontrada'
+        }, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        logger.error(f"Error en dhl_account_set_default: {str(e)}")
+        return Response({
+            'success': False,
+            'error': 'Error interno del servidor'
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def user_activities_view(request):
+    """Vista para obtener actividades del usuario"""
+    try:
+        page = request.GET.get('page', 1)
+        page_size = request.GET.get('page_size', 20)
+        
+        activities = UserActivity.objects.filter(user=request.user).order_by('-timestamp')
+        paginator = Paginator(activities, page_size)
+        
+        try:
+            activities_page = paginator.page(page)
+        except:
+            activities_page = paginator.page(1)
+        
+        serializer = UserActivitySerializer(activities_page, many=True)
+        
+        return Response({
+            'success': True,
+            'data': serializer.data,
+            'pagination': {
+                'page': activities_page.number,
+                'total_pages': paginator.num_pages,
+                'total_items': paginator.count,
+                'has_next': activities_page.has_next(),
+                'has_previous': activities_page.has_previous()
+            }
+        }, status=status.HTTP_200_OK)
+        
+    except Exception as e:
+        logger.error(f"Error en user_activities_view: {str(e)}")
+        return Response({
+            'success': False,
+            'error': 'Error interno del servidor'
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def user_activity_stats_view(request):
+    """Vista para obtener estadísticas de actividades del usuario"""
+    try:
+        # Estadísticas básicas
+        total_activities = UserActivity.objects.filter(user=request.user).count()
+        
+        # Actividades por tipo
+        activities_by_type = UserActivity.objects.filter(user=request.user).values('activity_type').annotate(
+            count=Count('activity_type')
+        ).order_by('-count')
+        
+        # Actividades recientes (últimos 7 días)
+        seven_days_ago = timezone.now() - timezone.timedelta(days=7)
+        recent_activities = UserActivity.objects.filter(
+            user=request.user, 
+            timestamp__gte=seven_days_ago
+        ).count()
+        
+        return Response({
+            'success': True,
+            'data': {
+                'total_activities': total_activities,
+                'activities_by_type': list(activities_by_type),
+                'recent_activities': recent_activities
+            }
+        }, status=status.HTTP_200_OK)
+        
+    except Exception as e:
+        logger.error(f"Error en user_activity_stats_view: {str(e)}")
+        return Response({
+            'success': False,
+            'error': 'Error interno del servidor'
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_postal_codes_by_location(request, country_code):
+    """Vista para obtener códigos postales por ubicación"""
+    try:
+        city_name = request.GET.get('city_name', '').strip()
+        page = request.GET.get('page', 1)
+        page_size = request.GET.get('page_size', 1000)
+        limit = request.GET.get('limit', 20000)
+        
+        if not city_name:
+            return Response({
+                'success': False,
+                'error': 'Nombre de ciudad requerido'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Importar el modelo ServiceAreaCityMap
+        from .models import ServiceAreaCityMap
+        
+        # Buscar códigos postales para la ciudad
+        postal_codes = ServiceAreaCityMap.objects.filter(
+            country_code=country_code.upper(),
+            city_name__iexact=city_name
+        ).exclude(
+            Q(postal_code_from='') | Q(postal_code_to='')
+        ).values(
+            'postal_code_from', 
+            'postal_code_to', 
+            'service_area'
+        ).distinct()[:int(limit)]
+        
+        # Convertir a lista y paginar
+        postal_list = list(postal_codes)
+        paginator = Paginator(postal_list, page_size)
+        
+        try:
+            postal_page = paginator.page(page)
+        except:
+            postal_page = paginator.page(1)
+        
+        return Response({
+            'success': True,
+            'data': list(postal_page),
+            'pagination': {
+                'page': postal_page.number,
+                'total_pages': paginator.num_pages,
+                'total_items': paginator.count,
+                'has_next': postal_page.has_next(),
+                'has_previous': postal_page.has_previous()
+            },
+            'city': city_name,
+            'country': country_code.upper()
+        }, status=status.HTTP_200_OK)
+        
+    except Exception as e:
+        logger.error(f"Error en get_postal_codes_by_location: {str(e)}")
+        return Response({
+            'success': False,
+            'error': 'Error interno del servidor'
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def test_city_service_area_mapping(request, country_code, city_name):
+    """Vista para probar el mapeo de ciudad a área de servicio"""
+    try:
+        # Importar el modelo ServiceAreaCityMap
+        from .models import ServiceAreaCityMap
+        
+        # Buscar mapeos para la ciudad
+        mappings = ServiceAreaCityMap.objects.filter(
+            country_code=country_code.upper(),
+            city_name__iexact=city_name
+        ).values(
+            'service_area',
+            'postal_code_from',
+            'postal_code_to'
+        )
+        
+        # Contar códigos postales por área de servicio
+        area_counts = {}
+        for mapping in mappings:
+            area = mapping['service_area']
+            if area not in area_counts:
+                area_counts[area] = 0
+            # Contar códigos postales en el rango
+            if mapping['postal_code_from'] and mapping['postal_code_to']:
+                try:
+                    from_code = int(mapping['postal_code_from'])
+                    to_code = int(mapping['postal_code_to'])
+                    area_counts[area] += (to_code - from_code + 1)
+                except (ValueError, TypeError):
+                    area_counts[area] += 1
+        
+        return Response({
+            'success': True,
+            'data': {
+                'city': city_name,
+                'country': country_code.upper(),
+                'total_mappings': len(mappings),
+                'area_counts': area_counts,
+                'mappings': list(mappings[:10])  # Solo primeros 10 para debug
+            }
+        }, status=status.HTTP_200_OK)
+        
+    except Exception as e:
+        logger.error(f"Error en test_city_service_area_mapping: {str(e)}")
+        return Response({
+            'success': False,
+            'error': 'Error interno del servidor'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

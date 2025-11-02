@@ -10,6 +10,7 @@ import LandedCostTab from './dashboard/LandedCostTab';
 import ShipmentTab from './dashboard/ShipmentTab';
 import TrackingTab from './dashboard/TrackingTab';
 import EpodTab from './dashboard/EpodTab';
+import PickupTab from './dashboard/PickupTab';
 import { formatPostalCode, normalizePayloadLocations, normalizeShipmentParties } from '../utils/dhlValidations';
 import { useNavigate } from 'react-router-dom';
 
@@ -1289,6 +1290,16 @@ const Dashboard = ({ selectedAccount = null, setSelectedAccount }) => {
               <span>Comprobante ePOD</span>
             </button>
             
+            <button 
+              onClick={() => setActiveTab('pickup')} 
+              className={`nav-tab ${activeTab === 'pickup' ? 'nav-tab-active' : 'nav-tab-inactive'}`}
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3a1 1 0 011-1h6a1 1 0 011 1v4h3a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9a2 2 0 012-2h3z" />
+              </svg>
+              <span>Recogida</span>
+            </button>
+            
             {/* Separador */}
             <div className="border-l border-corporate-300 h-6 self-center mx-2"></div>
             
@@ -1307,7 +1318,7 @@ const Dashboard = ({ selectedAccount = null, setSelectedAccount }) => {
 
           {/* Navegación Mobile */}
           <nav className="md:hidden">
-            {/* Grid de 3x2 para móvil */}
+            {/* Grid de 3x3 para móvil */}
             <div className="grid grid-cols-3 gap-2 mb-3">
               {/* Fila 1 */}
               <button 
@@ -1363,6 +1374,18 @@ const Dashboard = ({ selectedAccount = null, setSelectedAccount }) => {
               </button>
               
               <button 
+                onClick={() => setActiveTab('pickup')} 
+                className={`mobile-nav-tab ${activeTab === 'pickup' ? 'mobile-nav-tab-active' : 'mobile-nav-tab-inactive'}`}
+              >
+                <svg className="w-5 h-5 mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3a1 1 0 011-1h6a1 1 0 011 1v4h3a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9a2 2 0 012-2h3z" />
+                </svg>
+                <span className="text-xs leading-tight">Recogida</span>
+              </button>
+
+              {/* Fila 3 - Solo Historial centrado */}
+              <div></div> {/* Espacio vacío */}
+              <button 
                 onClick={() => setActiveTab('activity-history')} 
                 className={`mobile-nav-tab ${activeTab === 'activity-history' ? 'mobile-nav-tab-active' : 'mobile-nav-tab-inactive'}`}
               >
@@ -1371,6 +1394,7 @@ const Dashboard = ({ selectedAccount = null, setSelectedAccount }) => {
                 </svg>
                 <span className="text-xs leading-tight">Historial</span>
               </button>
+              <div></div> {/* Espacio vacío */}
             </div>
           </nav>
         </div>
@@ -1464,6 +1488,12 @@ const Dashboard = ({ selectedAccount = null, setSelectedAccount }) => {
             selectedAccount={selectedAccount}
             downloadDocument={downloadDocument}
             resetEpodState={resetEpodState}
+          />
+         )}
+
+        {activeTab === 'pickup' && (
+          <PickupTab
+            selectedAccount={selectedAccount}
           />
          )}
 

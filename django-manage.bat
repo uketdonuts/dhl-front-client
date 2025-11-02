@@ -1,17 +1,22 @@
 @echo off
-REM Script para ejecutar comandos de Django dentro del contenedor
+REM Script para ejecutar comandos Django dentro del contenedor
+REM Uso: django-manage.bat [comando]
 
-set DJANGO_COMMAND=%*
-
-if "%DJANGO_COMMAND%"=="" (
-    echo Uso: django-manage.bat [comando Django]
+if "%1"=="" (
+    echo Uso: django-manage.bat [comando]
+    echo.
     echo Ejemplos:
+    echo   django-manage.bat runserver
     echo   django-manage.bat migrate
     echo   django-manage.bat makemigrations
-    echo   django-manage.bat createsuperuser
     echo   django-manage.bat shell
-    exit /b 1
+    echo   django-manage.bat createsuperuser
+    echo   django-manage.bat collectstatic
+    echo   django-manage.bat test
+    goto end
 )
 
-echo Ejecutando: python manage.py %DJANGO_COMMAND%
-docker-compose -f docker-compose.yml exec backend python manage.py %DJANGO_COMMAND%
+echo Ejecutando: python manage.py %*
+docker-compose exec backend python manage.py %*
+
+:end

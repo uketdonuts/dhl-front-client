@@ -1,5 +1,11 @@
 @echo off
-REM Script para abrir un shell interactivo en el contenedor backend
+REM Script para acceder al shell del contenedor
+REM Uso: docker-shell.bat [servicio]
 
-echo Abriendo shell en el contenedor backend...
-docker-compose -f docker-compose.yml exec backend /bin/bash
+set service=%1
+if "%service%"=="" set service=backend
+
+echo Accediendo al shell del contenedor %service%...
+docker-compose exec %service% /bin/bash
+
+:end

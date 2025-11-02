@@ -20,6 +20,8 @@ const SmartLocationDropdown = ({
   const [cities, setCities] = useState([]);
   const [serviceAreas, setServiceAreas] = useState([]);
   const [postalCodes, setPostalCodes] = useState([]);
+  // Estado local para reflejar selección inmediata de código postal (evita parpadeos)
+  const [localPostalSelection, setLocalPostalSelection] = useState({ postalCodeRange: '' });
   
   // Estados de cache y optimización
   const [loadingStates, setLoadingStates] = useState({
@@ -513,6 +515,9 @@ const SmartLocationDropdown = ({
    * Manejar selección de código postal con fallback inteligente
    */
   const handlePostalCodeSelect = (postalCode) => {
+    console.log('📮 handlePostalCodeSelect called with:', postalCode);
+    console.log('🎯 Current value before update:', value);
+    
     const newValue = {
       ...value,
       postalCode: postalCode.postal_code_from,
@@ -533,10 +538,25 @@ const SmartLocationDropdown = ({
       newValue.serviceAreaName = saCode;
     }
 
+    // Reflejar selección localmente para evitar reset visual mientras padre actualiza
+    setLocalPostalSelection({ postalCodeRange: postalCode.display_range });
+    console.log('🔄 About to call onChange with:', newValue);
     onChange(newValue);
+    console.log('✅ Called onChange, closing dropdown');
     setOpenDropdown(null);
     setPostalSearch('');
   };
+
+  // Mantener estado local sincronizado con el valor controlado del padre
+  useEffect(() => {
+    if (value && typeof value.postalCodeRange !== 'undefined') {
+      setLocalPostalSelection((prev) =>
+        prev.postalCodeRange !== value.postalCodeRange
+          ? { postalCodeRange: value.postalCodeRange || '' }
+          : prev
+      );
+    }
+  }, [value?.postalCodeRange]);
 
   /**
    * Renderizar dropdown con búsqueda y estados de carga optimizados
@@ -603,7 +623,7 @@ const SmartLocationDropdown = ({
                   <button
                     key={index}
                     type="button"
-                    onClick={() => onSelect(option)}
+                    onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); onSelect(option); }}
                     className="w-full p-2 text-left hover:bg-blue-50 focus:bg-blue-100 focus:outline-none"
                   >
         {displayFormatter ? displayFormatter(option) : (option[displayKey] || `[${displayKey} missing]`)}
@@ -670,9 +690,9 @@ const SmartLocationDropdown = ({
             const options = useServiceAreas ? filteredServiceAreas : filteredCities;
             const searchValue = useServiceAreas ? serviceAreaSearch : citySearch;
             const setSearchValue = useServiceAreas ? setServiceAreaSearch : setCitySearch;
-    const placeholder = useServiceAreas 
-      ? (loadingStates.serviceAreas ? 'Cargando ciudades...' : value.cityName || 'Selecciona una ciudad...')
-      : (loadingStates.cities ? 'Cargando ciudades...' : value.cityName || 'Selecciona una ciudad...');
+    const placeholder = (useServiceAreas ? loadingStates.serviceAreas : loadingStates.cities)
+      ? 'Cargando ciudades...'
+      : (value.cityName || value.city || 'Selecciona una ciudad...');
             
             const handleSelect = useServiceAreas 
               ? (item) => {
@@ -750,17 +770,34 @@ const SmartLocationDropdown = ({
             Código Postal
           </label>
           
-          {renderSearchDropdown(
-            openDropdown === 'postal',
-            () => setOpenDropdown(openDropdown === 'postal' ? null : 'postal'),
-            value.postalCodeRange || 'Selecciona código postal...',
-            postalSearch,
-            setPostalSearch,
-            filteredPostalCodes,
-            handlePostalCodeSelect,
-            'display_range',
-            'postalCodes'
-          )}
+          {(() => {
+            console.log('📮 Rendering postal code dropdown with:', {
+              hasPostalCodes: countryInfo.hasPostalCodes,
+              country: value.country,
+              serviceArea: value.serviceArea,
+              city: value.city,
+              filteredPostalCodes: filteredPostalCodes?.length || 0,
+              postalCodesData: postalCodes.data?.length || 0,
+              postalSearch: postalSearch,
+              currentValue: value.postalCodeRange
+            });
+            
+            // Placeholder usa selección local primero para evitar parpadeo
+            const postalPlaceholder = (localPostalSelection.postalCodeRange && String(localPostalSelection.postalCodeRange).trim())
+              || (value.postalCodeRange && String(value.postalCodeRange).trim())
+              || 'Selecciona código postal...';
+            return renderSearchDropdown(
+              openDropdown === 'postal',
+              () => setOpenDropdown(openDropdown === 'postal' ? null : 'postal'),
+              postalPlaceholder,
+              postalSearch,
+              setPostalSearch,
+              filteredPostalCodes,
+              handlePostalCodeSelect,
+              'display_range',
+              'postalCodes'
+            );
+          })()}
         </div>
       )}
     </div>

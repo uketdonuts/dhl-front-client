@@ -31,6 +31,9 @@ urlpatterns = [
     path('accounts/<int:account_id>/delete/', views.dhl_account_delete, name='dhl_account_delete'),
     path('accounts/<int:account_id>/set-default/', views.dhl_account_set_default, name='dhl_account_set_default'),
     
+    # Endpoint para pickup booking
+    path('dhl/pickup/', views.pickup_view, name='pickup'),
+    
     # Endpoints para historial de actividades de usuarios
     path('user-activities/', views.user_activities_view, name='user_activities'),
     path('user-activities/stats/', views.user_activity_stats_view, name='user_activity_stats'),
@@ -55,5 +58,4 @@ urlpatterns = [
     path('service-zones/resolve-display/', views.resolve_service_area_display, name='resolve_service_area_display'),
     path('service-zones/search/', views.search_service_zones, name='search_service_zones'),
     path('service-zones/analyze-country/<str:country_code>/', views.analyze_country_structure, name='analyze_country_structure'),
-    path('service-zones/map-stats/<str:country_code>/', views.map_stats_by_country, name='map_stats_by_country'),
 ]
