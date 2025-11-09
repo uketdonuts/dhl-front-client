@@ -439,10 +439,10 @@ class DHLService:
             logger.error(f"Error calculating chargeable weight: {str(e)}")
             return float(actual_weight) if actual_weight else 0.0
 
-    def get_rate(self, origin, destination, weight, dimensions, declared_weight=None, content_type="P", account_number=None):
+    def get_rate(self, origin, destination, weight, dimensions, declared_weight=None, content_type="P", account_number=None, shipping_date=None):
         """
         Obtiene cotización de tarifas usando la API REST moderna de DHL
-        
+
         Args:
             origin: Información del origen
             destination: Información del destino
@@ -450,6 +450,7 @@ class DHLService:
             dimensions: Dimensiones del paquete
             declared_weight: Peso declarado (opcional)
             content_type: Tipo de contenido - "P" para NON_DOCUMENTS, "D" para DOCUMENTS
+            shipping_date: Fecha de envío programada (opcional, si no se proporciona se calcula 5 días laborales)
         """
         try:
             # Validar tipo de contenido
@@ -475,15 +476,48 @@ class DHLService:
             account_to_use = account_number if account_number else '706014493'
             logger.info(f"Using account number for rate: {account_to_use}")
             
+            # Función helper para obtener código postal válido por país
+            def get_valid_postal_code(postal_code, country_code):
+                """Retorna un código postal válido para el país dado"""
+                # Si ya hay un código postal válido (no vacío y no "0"), usarlo
+                if postal_code and postal_code not in ['0', '00', '000', '0000', '00000']:
+                    return postal_code
+
+                # Códigos postales por defecto por país (capitales o ciudades principales)
+                default_postal_codes = {
+                    'PA': '0000',      # Panamá - acepta 0000
+                    'CR': '10101',     # Costa Rica - San José
+                    'NI': '11001',     # Nicaragua - Managua
+                    'GT': '01001',     # Guatemala - Ciudad de Guatemala
+                    'SV': '01101',     # El Salvador - San Salvador
+                    'HN': '11101',     # Honduras - Tegucigalpa
+                    'CO': '110111',    # Colombia - Bogotá
+                    'MX': '01000',     # México - Ciudad de México
+                    'US': '33101',     # USA - Miami
+                    'PE': '15001',     # Perú - Lima
+                    'CL': '8320000',   # Chile - Santiago
+                    'AR': 'C1000',     # Argentina - Buenos Aires
+                    'BR': '01310-100', # Brasil - São Paulo
+                    'EC': '170150',    # Ecuador - Quito
+                }
+
+                return default_postal_codes.get(country_code, '0000')
+
             # Limpiar y preparar datos - soportar tanto 'country' como 'countryCode'
             origin_city = self._clean_text(origin.get('city', origin.get('cityName', 'Panama')))
-            origin_postal = origin.get('postal_code', origin.get('postalCode', '0'))
             origin_country = origin.get('country', origin.get('countryCode', 'PA'))
+            origin_postal_raw = origin.get('postal_code', origin.get('postalCode', '0'))
+            origin_postal = get_valid_postal_code(origin_postal_raw, origin_country)
+            if origin_postal != origin_postal_raw:
+                logger.info(f"Replaced origin postal code '{origin_postal_raw}' with '{origin_postal}' for country {origin_country}")
             origin_state = origin.get('state', 'PA')
-            
+
             dest_city = self._clean_text(destination.get('city', destination.get('cityName', 'MIA')))
-            dest_postal = destination.get('postal_code', destination.get('postalCode', '25134'))
-            dest_country = destination.get('country', destination.get('countryCode', 'CO'))  # Cambiar default de US a CO
+            dest_country = destination.get('country', destination.get('countryCode', 'CO'))
+            dest_postal_raw = destination.get('postal_code', destination.get('postalCode', '0'))
+            dest_postal = get_valid_postal_code(dest_postal_raw, dest_country)
+            if dest_postal != dest_postal_raw:
+                logger.info(f"Replaced destination postal code '{dest_postal_raw}' with '{dest_postal}' for country {dest_country}")
 
             # Normalizar countryCode a ISO-2 sin cambiar la estructura del payload
             normalized_origin_country = self._normalize_country_code(origin_country, default='PA')
@@ -508,26 +542,37 @@ class DHLService:
             }
             
             # Estructura de datos para API REST de DHL
-            # Calcular fecha de envío (con mínimo 2 días laborales de anticipación para asegurar disponibilidad)
+            # Calcular fecha de envío o usar la proporcionada
             from datetime import datetime, timedelta
 
-            # Encontrar el próximo día laboral con al menos 3 días laborales de anticipación
-            current_date = datetime.now()
-            days_ahead = 1
-            business_days_found = 0
-            business_days_required = 5  # Mínimo 5 días laborales de anticipación (DHL cambió políticas)
+            if shipping_date:
+                # Si se proporciona fecha, usarla (viene del frontend en formato YYYY-MM-DD)
+                try:
+                    provided_date = datetime.strptime(shipping_date, '%Y-%m-%d')
+                    calculated_shipping_date = provided_date.strftime('%Y-%m-%dT13:00:00GMT+00:00')
+                    logger.info(f"Using provided shipping date: {calculated_shipping_date}")
+                except (ValueError, TypeError):
+                    logger.warning(f"Invalid shipping date format: {shipping_date}, calculating default")
+                    shipping_date = None
 
-            # Buscar N días laborales en el futuro
-            while business_days_found < business_days_required:
-                next_date = current_date + timedelta(days=days_ahead)
-                if next_date.weekday() < 5:  # 0=Monday, 6=Sunday (0-4 son días laborales)
-                    business_days_found += 1
-                    if business_days_found >= business_days_required:
-                        break
-                days_ahead += 1
+            if not shipping_date:
+                # Calcular fecha con mínimo 5 días laborales de anticipación
+                current_date = datetime.now()
+                days_ahead = 1
+                business_days_found = 0
+                business_days_required = 5  # Mínimo 5 días laborales de anticipación (DHL cambió políticas)
 
-            shipping_date = next_date.strftime('%Y-%m-%dT13:00:00GMT+00:00')
-            logger.info(f"Using shipping date: {shipping_date} (weekday: {next_date.strftime('%A')}) - weekday number: {next_date.weekday()}, business days ahead: {business_days_found}")
+                # Buscar N días laborales en el futuro
+                while business_days_found < business_days_required:
+                    next_date = current_date + timedelta(days=days_ahead)
+                    if next_date.weekday() < 5:  # 0=Monday, 6=Sunday (0-4 son días laborales)
+                        business_days_found += 1
+                        if business_days_found >= business_days_required:
+                            break
+                    days_ahead += 1
+
+                calculated_shipping_date = next_date.strftime('%Y-%m-%dT13:00:00GMT+00:00')
+                logger.info(f"Using calculated shipping date: {calculated_shipping_date} (weekday: {next_date.strftime('%A')}) - weekday number: {next_date.weekday()}, business days ahead: {business_days_found}")
             
             request_data = {
                 "customerDetails": {
@@ -548,7 +593,7 @@ class DHLService:
                         "number": account_to_use
                     }
                 ],
-                "plannedShippingDateAndTime": shipping_date,
+                "plannedShippingDateAndTime": calculated_shipping_date,
                 "unitOfMeasurement": "metric",
                 "isCustomsDeclarable": is_customs_declarable,
                 "packages": [
@@ -1513,20 +1558,57 @@ class DHLService:
                 return parsed
             
             elif response.status_code >= 400:
-                # Mensaje genérico para todos los errores, incluyendo un preview de la respuesta cruda
+                # Intentar parsear el mensaje de error de DHL
+                error_message = "Ha ocurrido un error"
+                error_detail = None
                 raw_preview = None
+
                 try:
                     raw_text = response.text or ""
                     raw_preview = raw_text[:1500]
-                except Exception:
-                    raw_preview = None
-                return {
+
+                    # Intentar parsear JSON de error
+                    error_data = response.json()
+
+                    # DHL puede devolver errores en diferentes formatos
+                    if isinstance(error_data, dict):
+                        # Formato: { "detail": "mensaje" }
+                        if 'detail' in error_data:
+                            error_message = error_data['detail']
+
+                        # Formato: { "message": "mensaje" }
+                        elif 'message' in error_data:
+                            error_message = error_data['message']
+
+                        # Formato: { "title": "titulo", "detail": "detalle" }
+                        elif 'title' in error_data:
+                            error_message = error_data.get('title', error_message)
+                            error_detail = error_data.get('detail')
+
+                        # Formato con array de errores: { "errors": [...] }
+                        elif 'errors' in error_data and isinstance(error_data['errors'], list):
+                            errors_list = error_data['errors']
+                            if errors_list:
+                                first_error = errors_list[0]
+                                if isinstance(first_error, dict):
+                                    error_message = first_error.get('message', first_error.get('detail', error_message))
+                                    error_detail = first_error.get('additionalDetails')
+
+                except Exception as e:
+                    logger.warning(f"Could not parse error JSON: {e}")
+
+                result = {
                     "success": False,
                     "error_code": str(response.status_code),
-                    "message": "Ha ocurrido un error",
+                    "message": error_message,
                     "http_status": response.status_code,
                     "raw_response": raw_preview
                 }
+
+                if error_detail:
+                    result['error_detail'] = error_detail
+
+                return result
             
             else:
                 return {

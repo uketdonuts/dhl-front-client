@@ -13,7 +13,9 @@
       "Bash(docker-compose down:*)",
       "Bash(set:*)",
       "Bash(docker exec:*)",
-      "Bash(curl:*)"
+      "Bash(curl:*)",
+      "Bash(npm install)",
+      "Bash(npm start)"
     ],
     "deny": [],
     "ask": []

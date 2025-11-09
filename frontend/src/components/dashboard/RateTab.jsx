@@ -1,10 +1,39 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import PropTypes from 'prop-types';
 import RateResults from '../RateResults';
 import FieldTooltip from '../FieldTooltip';
 import useFormValidation from '../../hooks/useFormValidation';
 import FormValidationStatus from '../FormValidationStatus';
 import NumericInput from '../NumericInput';
+
+// Función para calcular N días laborales en el futuro
+const calculateBusinessDays = (days) => {
+  let current = new Date();
+  let daysAhead = 1;
+  let businessDaysFound = 0;
+
+  while (businessDaysFound < days) {
+    const nextDate = new Date(current);
+    nextDate.setDate(current.getDate() + daysAhead);
+
+    // 0=Domingo, 6=Sábado
+    const dayOfWeek = nextDate.getDay();
+    if (dayOfWeek !== 0 && dayOfWeek !== 6) {
+      businessDaysFound++;
+      if (businessDaysFound >= days) {
+        return nextDate;
+      }
+    }
+    daysAhead++;
+  }
+  return new Date();
+};
+
+// Función para verificar si una fecha es día laboral
+const isBusinessDay = (date) => {
+  const dayOfWeek = date.getDay();
+  return dayOfWeek !== 0 && dayOfWeek !== 6; // No domingo ni sábado
+};
 
 /**
  * Componente para la pestaña de Cotizar Tarifas
@@ -23,9 +52,26 @@ const RateTab = ({
   // ✅ Usar hook de validación
   const validation = useFormValidation(rateData, 'rate');
 
+  // Estado para la fecha de envío (mínimo 5 días laborales)
+  const [shippingDate, setShippingDate] = useState('');
+  const [minDate, setMinDate] = useState('');
+
+  // Calcular fecha mínima (5 días laborales) al montar el componente
+  useEffect(() => {
+    const minBusinessDate = calculateBusinessDays(5);
+    const formatted = minBusinessDate.toISOString().split('T')[0];
+    setMinDate(formatted);
+    setShippingDate(formatted);
+    // Actualizar el estado global de rateData con la fecha calculada
+    if (updateRateData) {
+      updateRateData('shippingDate', formatted);
+    }
+  }, [updateRateData]);
+
   // ✅ Manejar envío con validación
   const handleSubmit = () => {
     if (validation.validate()) {
+      // Llamar al handler original - agregaremos la fecha en el Dashboard
       handleRateRequest();
     }
   };
@@ -289,6 +335,49 @@ const RateTab = ({
                 {validation.hasFieldError('dimensions.height') && (
                   <p className="mt-1 text-sm text-red-600">{validation.getFieldError('dimensions.height')}</p>
                 )}
+              </div>
+            </div>
+          </div>
+
+          {/* Fecha de Envío */}
+          <div className="mt-4">
+            <h4 className="text-md font-medium text-gray-900 mb-3">Fecha de Envío</h4>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="flex items-center text-sm font-medium text-gray-700 mb-1">
+                  Fecha Programada de Envío
+                  <FieldTooltip fieldPath="rate.shippingDate" />
+                </label>
+                <input
+                  type="date"
+                  value={shippingDate}
+                  min={minDate}
+                  onChange={(e) => {
+                    const selectedDate = new Date(e.target.value);
+                    if (isBusinessDay(selectedDate)) {
+                      setShippingDate(e.target.value);
+                      updateRateData('shippingDate', e.target.value);
+                    } else {
+                      alert('Por favor seleccione un día laboral (Lunes a Viernes)');
+                    }
+                  }}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-dhl-red"
+                />
+                <p className="mt-1 text-xs text-gray-500">
+                  Mínimo 5 días laborales desde hoy. Solo días laborales (Lun-Vie)
+                </p>
+              </div>
+              <div className="flex items-center bg-blue-50 border border-blue-200 rounded-md p-3">
+                <div className="flex-shrink-0">
+                  <svg className="h-5 w-5 text-blue-400" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+                  </svg>
+                </div>
+                <div className="ml-3">
+                  <p className="text-sm text-blue-700">
+                    <strong>Nota:</strong> DHL requiere al menos 5 días laborales de anticipación para garantizar disponibilidad de servicio.
+                  </p>
+                </div>
               </div>
             </div>
           </div>

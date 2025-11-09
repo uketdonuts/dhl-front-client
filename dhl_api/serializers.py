@@ -70,7 +70,9 @@ class RateRequestSerializer(serializers.Serializer):
     account_number = serializers.CharField(max_length=50, required=False, allow_blank=True,
                                            default='',
                                            help_text="Número de cuenta DHL a usar para la cotización")
-    
+    shippingDate = serializers.CharField(max_length=20, required=False, allow_blank=True,
+                                         help_text="Fecha de envío programada en formato YYYY-MM-DD (mínimo 5 días laborales)")
+
     def validate_declared_weight(self, value):
         """Validar que el peso declarado sea positivo"""
         if value is not None and value <= 0:

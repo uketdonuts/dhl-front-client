@@ -262,7 +262,7 @@ const Dashboard = ({ selectedAccount = null, setSelectedAccount }) => {
     },
     destination: {
       postal_code: "",
-      city: "", 
+      city: "",
       country: ""
     },
     weight: 0,
@@ -274,6 +274,7 @@ const Dashboard = ({ selectedAccount = null, setSelectedAccount }) => {
     declared_weight: 0,
     service: 'P',
     account_number: '',
+    shippingDate: '', // Fecha de envío programada (mínimo 5 días laborales)
   });
 
   // Estados para guardar datos completos de ubicaciones de dropdowns
@@ -443,6 +444,15 @@ const Dashboard = ({ selectedAccount = null, setSelectedAccount }) => {
           } else if (dhlMessage.includes('410') && dhlMessage.includes('suspended')) {
             errorMessage = '🚫 Servicio suspendido';
             errorDetails = 'El servicio DHL a este destino está temporalmente suspendido. Esto puede deberse a restricciones operativas o logísticas.';
+          } else if (dhlMessage.toLowerCase().includes('pickup') && (dhlMessage.toLowerCase().includes('date') || dhlMessage.toLowerCase().includes('fecha'))) {
+            errorMessage = '📅 Error en fecha de recogida';
+            errorDetails = dhlMessage.replace('Error DHL API: ', '') + '\n\nLa fecha seleccionada puede ser un día festivo o no laborable en el país de origen. Por favor selecciona otra fecha.';
+          } else if (dhlMessage.toLowerCase().includes('planned') && dhlMessage.toLowerCase().includes('shipping')) {
+            errorMessage = '📅 Error en fecha de envío';
+            errorDetails = dhlMessage.replace('Error DHL API: ', '') + '\n\nLa fecha seleccionada no es válida. Por favor selecciona una fecha laborable (Lunes a Viernes, excluyendo días festivos).';
+          } else if (dhlMessage.toLowerCase().includes('not available') && dhlMessage.toLowerCase().includes('date')) {
+            errorMessage = '📅 Fecha no disponible';
+            errorDetails = dhlMessage.replace('Error DHL API: ', '') + '\n\nLa fecha seleccionada no está disponible para este servicio. Por favor selecciona otra fecha.';
           } else if (dhlMessage.includes('400') || errorResponse.error_code === '400') {
             errorMessage = '❌ Error de validación';
             errorDetails = dhlMessage.replace('Error DHL API: ', '');

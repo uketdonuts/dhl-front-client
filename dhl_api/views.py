@@ -486,7 +486,8 @@ def rate_view(request):
                 dimensions=serializer.validated_data['dimensions'],
                 declared_weight=serializer.validated_data.get('declared_weight'),
                 content_type=service,
-                account_number=account_number
+                account_number=account_number,
+                shipping_date=serializer.validated_data.get('shippingDate')
             )
 
             # Agregar metadatos adicionales
